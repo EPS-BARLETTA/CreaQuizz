@@ -37,7 +37,7 @@ const {useEffect,useRef,useState}=React;
 
 // Stockage public anonyme du quiz publié.
 // Aucune donnée nominative élève n'est envoyée.
-const STORAGE_API="https://superjsonblob.com/api/jsonBlob";
+
 
 const GOOD=[
   "Bravo ! C’est juste.",
@@ -466,23 +466,22 @@ function buildQuiz(text,count){
 ========================================================= */
 
 async function publishQuiz(payload){
-  const res=await fetch(STORAGE_API,{
+  const res=await fetch("/api/save-quiz",{
     method:"POST",
-    headers:{"Content-Type":"application/json","Accept":"application/json"},
+    headers:{"Content-Type":"application/json"},
     body:JSON.stringify(payload)
   });
-  if(!res.ok)throw new Error("Le quiz a été créé, mais sa publication en ligne a échoué.");
-  const data=await res.json();
-  if(!data.id)throw new Error("Le service de publication n’a pas renvoyé d’identifiant.");
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok)throw new Error(data.error||"Le quiz a été créé, mais sa publication en ligne a échoué.");
+  if(!data.id)throw new Error("Le serveur n’a pas renvoyé l’identifiant du quiz.");
   return data.id;
 }
 
 async function loadQuiz(id){
-  const res=await fetch(`${STORAGE_API}/${encodeURIComponent(id)}`,{
-    headers:{"Accept":"application/json"}
-  });
-  if(!res.ok)throw new Error("Quiz introuvable.");
-  return await res.json();
+  const res=await fetch(`/api/get-quiz?id=${encodeURIComponent(id)}`);
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok)throw new Error(data.error||"Quiz introuvable.");
+  return data;
 }
 
 function studentUrl(id){
