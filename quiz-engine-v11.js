@@ -148,7 +148,7 @@ function parseProcedure(content,meta){
   if(!m)return null;
   const action=validTerm(m[1]);
   let rawAnswer=m[2].replace(/^il suffit de\s*:?\s*/i,'').replace(/;\s*(?:multiplier|recopier|additionner|soustraire|appliquer)/gi, m=>' et '+m.replace(/^;\s*/,'')).replace(/\s+/g,' ').trim();
-  const answer=validAnswer(rawAnswer);
+  const answer=validSentence(rawAnswer);
   if(!action||!answer||contradiction(action,answer))return null;
   return{kind:'procedure',term:action,answer,page:meta.page,source:content};
 }
@@ -222,34 +222,65 @@ function extractKnowledge(text){
   return bank;
 }
 
+function normalizeTermForQuestion(term){
+  return String(term||'').replace(/^(Une|Un|Le|La|Les)\s+/i,'').trim();
+}
 function questionText(item,type){
-  if(type==='definition')return `Quelle définition correspond à « ${item.term} » ?`;
-  if(type==='reverse')return `Quel terme correspond à la définition suivante : « ${item.answer} » ?`;
-  if(type==='procedure')return `Que faut-il faire pour ${item.term} ?`;
+  if(type==='definition'){
+    const t=normalizeTermForQuestion(item.term);
+    if(/^(?:Développer|Effectuer|Réduire|Calculer|Supprimer|Ajouter|Soustraire|Multiplier|Diviser)\b/i.test(item.term))
+      return `Que signifie « ${item.term.charAt(0).toLowerCase()+item.term.slice(1)} » ?`;
+    return `Quelle est la définition de « ${t} » ?`;
+  }
+  if(type==='reverse')return `Quel terme correspond à cette définition : « ${item.answer} » ?`;
+  if(type==='procedure'){
+    const t=item.term.trim();
+    if(/^réduire\b/i.test(t))return `Comment réduit-on ${t.replace(/^réduire\s+/i,'')} ?`;
+    if(/^calculer\b/i.test(t))return `Comment calcule-t-on ${t.replace(/^calculer\s+/i,'')} ?`;
+    return `Que faut-il faire pour ${t} ?`;
+  }
   if(type==='capability')return `Que permet ${item.term.replace(/^La\s+/,'la ')} ?`;
-  if(type==='alias')return `Comment appelle-t-on aussi « ${item.term} » ?`;
+  if(type==='alias')return `Quel autre nom donne-t-on à « ${normalizeTermForQuestion(item.term)} » ?`;
   return '';
 }
-function candidatePool(bank,item,type){
-  if(type==='reverse')return bank.filter(x=>x.kind==='definition').map(x=>x.term);
-  if(type==='alias')return [...bank.filter(x=>x.kind==='definition').map(x=>x.term),...bank.filter(x=>x.kind==='alias').map(x=>x.answer)].filter(x=>x!==item.term&&x!==item.answer);
-  if(type==='procedure')return bank.filter(x=>x.kind==='procedure').map(x=>x.answer);
-  if(type==='capability')return bank.filter(x=>x.kind==='capability').map(x=>x.answer);
-  return bank.filter(x=>x.kind==='definition').map(x=>x.answer);
+function familyKey(item){
+  const t=canonicalTopic(item.term||'');
+  if(/parenth[eè]ses|signe|symbole/.test(t))return 'parentheses';
+  if(/distributiv|développ|produit/.test(t))return 'developpement';
+  if(/mon[oô]me|polyn[oô]me|terme|coefficient/.test(t))return 'algebre';
+  if(/expression litt/.test(t))return 'expression';
+  if(/conjecture|proposition/.test(t))return 'raisonnement';
+  return t.split(' ').slice(0,2).join(' ');
 }
-function pickDistractors(pool,answer,desired=3){
-  const answerLen=answer.length;
-  const scored=[];
-  for(const x of [...new Set(pool)]){
-    if(x===answer||!x)continue;
-    if(typeSafe(x)===false)continue;
+function candidateItems(bank,item,type){
+  if(type==='reverse')return bank.filter(x=>x.kind==='definition'&&x!==item).map(x=>({text:x.term,item:x}));
+  if(type==='alias')return [...bank.filter(x=>x.kind==='definition').map(x=>({text:x.term,item:x})),...bank.filter(x=>x.kind==='alias').map(x=>({text:x.answer,item:x}))].filter(x=>x.text!==item.term&&x.text!==item.answer);
+  if(type==='procedure')return bank.filter(x=>x.kind==='procedure'&&x!==item).map(x=>({text:x.answer,item:x}));
+  if(type==='capability')return [
+    ...bank.filter(x=>x.kind==='capability'&&x!==item).map(x=>({text:x.answer,item:x})),
+    ...bank.filter(x=>x.kind==='procedure').map(x=>({text:x.term,item:x}))
+  ];
+  return bank.filter(x=>x.kind==='definition'&&x!==item).map(x=>({text:x.answer,item:x}));
+}
+function pickDistractors(candidates,answer,item,desired=3){
+  const answerLen=answer.length,targetFamily=familyKey(item),scored=[];
+  for(const c of candidates){
+    const x=c.text;
+    if(x===answer||!x||typeSafe(x)===false)continue;
     const ratio=Math.max(x.length,answerLen)/Math.max(1,Math.min(x.length,answerLen));
     const lenPenalty=Math.abs(x.length-answerLen)/Math.max(30,answerLen);
     const sim=similarity(x,answer);
-    if(sim>.78||ratio>3.2)continue;
-    scored.push({x,score:1-lenPenalty+sim*.25+Math.random()*.08});
+    if(sim>.82||ratio>4.2)continue;
+    const sameFamily=familyKey(c.item||{})===targetFamily?1:0;
+    const samePage=(c.item&&c.item.page===item.page)?1:0;
+    scored.push({x,score:1.2+sameFamily*.8+samePage*.15-lenPenalty*.8+sim*.18});
   }
-  return scored.sort((a,b)=>b.score-a.score).slice(0,desired).map(o=>o.x);
+  const picked=[];
+  for(const o of scored.sort((a,b)=>b.score-a.score)){
+    if(!picked.includes(o.x))picked.push(o.x);
+    if(picked.length===desired)break;
+  }
+  return picked;
 }
 function typeSafe(s){return !!(validAnswer(s)||validTerm(s));}
 function explanation(item){
@@ -264,11 +295,11 @@ function makeQuestion(bank,item,type,index){
   q.question=questionText(item,type);
   if(type==='reverse'){
     q.answer=item.term;
-    const ds=pickDistractors(candidatePool(bank,item,type),q.answer,3);
+    const ds=pickDistractors(candidateItems(bank,item,type),q.answer,item,3);
     if(ds.length<2)return null;q.options=shuffle([q.answer,...ds]);
   }else{
     q.answer=item.answer;
-    const ds=pickDistractors(candidatePool(bank,item,type),q.answer,3);
+    const ds=pickDistractors(candidateItems(bank,item,type),q.answer,item,3);
     if(ds.length<2)return null;q.options=shuffle([q.answer,...ds]);
   }
   return validateQuestion(q)?q:null;
@@ -280,16 +311,21 @@ function makeTrueFalse(item,index,truth=true){
   return{id:`q-${index}-vf`,topic:canonicalTopic(item.term),page:item.page,type:'truefalse',question:`Vrai ou faux : « ${statement} »`,options:['Vrai','Faux'],answer:'Vrai',hint:`Relis la définition de « ${item.term} ».`,explanation:explanation(item),source:item.source};
 }
 function validateQuestion(q){
-  if(!q||!validAnswer(q.answer))return false;
-  if(hasCorruptMath(q.question)||/[\$%!#=<>+*\\|~^]/.test(q.question))return false;
-  if(!q.options.includes(q.answer)||new Set(q.options).size!==q.options.length)return false;
-  if(q.options.some(o=>!validAnswer(o)&&!validTerm(o)&&!["Vrai","Faux"].includes(o)))return false;
-  if(/^Que faut-il faire pour/i.test(q.question)&&contradiction(q.question,q.answer))return false;
+  if(!q||!q.question||!q.answer||!Array.isArray(q.options))return false;
+  if(hasCorruptMath(q.question)||hasCorruptMath(q.answer))return false;
+  if(q.options.length<2||new Set(q.options).size!==q.options.length||!q.options.includes(q.answer))return false;
+  if(q.options.some(x=>hasCorruptMath(x)))return false;
+  if(q.type==='procedure'&&contradiction(q.question,q.answer))return false;
+  if(BAD_END.test(q.answer))return false;
   return true;
 }
 function qualityScore(q){
   let s=100;
-  if(q.type==='truefalse')s-=8;
+  if(q.type==='truefalse')s-=14;
+  if(q.type==='capability')s+=14;
+  if(q.type==='alias')s+=7;
+  if(q.type==='procedure')s+=6;
+  if(q.type==='reverse')s+=2;
   if(q.question.length>180)s-=10;
   const lens=q.options.map(x=>x.length),max=Math.max(...lens),min=Math.min(...lens);
   if(max-min>150)s-=10;
@@ -317,7 +353,7 @@ function buildQuiz(text,count=10){
       if(chosen.includes(q))continue;
       const tu=topicUse.get(q.topic)||0,pu=pageUse.get(q.page)||0,ty=typeUse.get(q.type)||0;
       if(tu>=2)continue;
-      let score=qualityScore(q)-tu*24-pu*4-ty*3+Math.random();
+      let score=qualityScore(q)-tu*28-pu*4-ty*3;
       if(tu===0)score+=14;
       if(score>bestScore){bestScore=score;best=q}
     }
