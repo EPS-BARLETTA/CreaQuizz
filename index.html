@@ -111,40 +111,96 @@ function cleanLabel(s){
 }
 
 function parseCourse(text){
-  const ls=lines(text);
+  // Le texte issu des PDF/Notability est souvent "aplati" et certains caractères
+  // sont mal reconnus (ex. Définition -> DéOinition). On normalise avant analyse.
+  const normalized = norm(text)
+    .replace(/DéOinition/gi,"Définition")
+    .replace(/DeOinition/gi,"Définition")
+    .replace(/Propriété/gi,"Propriété")
+    .replace(/Définition/gi,"Définition")
+    .replace(/Méthode/gi,"Méthode")
+    .replace(/Règle/gi,"Règle");
+
+  // Découpe non seulement aux retours ligne, mais aussi avant les marqueurs pédagogiques.
+  const expanded = normalized
+    .replace(/\s+(Définition\s*:)/gi,"\n$1")
+    .replace(/\s+(Propriété\s*:)/gi,"\n$1")
+    .replace(/\s+(Méthode\s*:)/gi,"\n$1")
+    .replace(/\s+(Règle\s*:)/gi,"\n$1")
+    .replace(/\s+(Rappel\s*:)/gi,"\n$1")
+    .replace(/\s+(Remarque\s*:)/gi,"\n$1")
+    .replace(/\s+(Exemple(?:s)?\s*:)/gi,"\n$1")
+    .replace(/\s+(Produit remarquable\s*:)/gi,"\n$1");
+
+  const ls=expanded.split("\n").map(x=>x.trim()).filter(Boolean);
   const items=[];
+
   for(let i=0;i<ls.length;i++){
     const raw=ls[i];
-    const low=raw.toLowerCase();
-
     let type=null;
-    if(/^définition\s*:/i.test(raw)) type="definition";
+
+    if(/^(définition|definition)\s*:/i.test(raw)) type="definition";
     else if(/^propriété\s*:/i.test(raw)) type="property";
     else if(/^méthode\s*:/i.test(raw)) type="method";
     else if(/^règle\s*:/i.test(raw)) type="rule";
     else if(/^rappel\s*:/i.test(raw)) type="reminder";
     else if(/^produit remarquable\s*:/i.test(raw)) type="identity";
-    else if(/^exemple\s*:/i.test(raw)) type="example";
+    else if(/^exemples?\s*:/i.test(raw)) type="example";
 
-    const formula = raw.match(/([\(]?[a-zA-Z0-9]+[\+\-][a-zA-Z0-9]+[\)]?²?\s*=\s*[^.;]+)/);
+    // Formules suffisamment explicites, y compris si elles commencent par des lettres.
+    const formula = raw.match(/([\(]?[a-zA-Z0-9]+(?:\s*[\+\-]\s*[a-zA-Z0-9]+)+[\)]?²?\s*=\s*[^.;]+)/);
     if(formula && !type) type="formula";
 
     if(type){
-      let content=cleanLabel(raw);
-      if(type==="identity" && !content && ls[i+1]) content=ls[++i];
+      let content = raw
+        .replace(/^(définition|definition|propriété|méthode|règle|rappel|remarque|produit remarquable|exemples?)\s*:\s*/i,"")
+        .trim();
+
+      // Si le marqueur est seul, on prend la ligne suivante.
+      if(!content && ls[i+1]) content=ls[++i];
+
       items.push({type,content,raw});
       continue;
     }
 
-    if(items.length && /^(pour|le |la |les |on |k\(|\(|[a-zA-Z0-9]+\()/i.test(raw) && raw.length<220){
+    // Rattache les phrases de méthode/propriété qui suivent.
+    if(items.length && raw.length<260){
       const prev=items[items.length-1];
-      if(["method","rule","property","identity"].includes(prev.type)){
+      if(["method","rule","property","identity","definition"].includes(prev.type) &&
+         /^(pour|on |le |la |les |un |une |quel que|soient|k\(|\(|[a-zA-Z0-9]+\()/i.test(raw)){
         prev.content += " " + raw;
       }
     }
   }
 
-  return items.filter(x=>x.content.length>5);
+  // MODE DE SECOURS :
+  // si peu de blocs formels ont été reconnus, on récupère les phrases porteuses de sens.
+  if(items.length<3){
+    const sentences = normalized
+      .split(/(?<=[.!?])\s+|\n+/)
+      .map(s=>s.trim())
+      .filter(s=>s.length>=25 && s.length<=240);
+
+    for(const s of sentences){
+      if(/est une|est un|signifie|permet de|pour .* il (?:faut|suffit)|on (?:ajoute|recopie|multiplie|applique|additionne|soustrait)|est égal à/i.test(s)){
+        const guessed = /est une|est un|signifie/i.test(s) ? "definition" :
+                        /pour .* il (?:faut|suffit)|on (?:ajoute|recopie|multiplie|applique|additionne|soustrait)/i.test(s) ? "method" :
+                        "property";
+        items.push({type:guessed,content:s,raw:s});
+      }
+    }
+  }
+
+  // Déduplication
+  const seen=new Set();
+  return items.filter(x=>{
+    const c=(x.content||"").trim();
+    if(c.length<5) return false;
+    const k=(x.type+"|"+c.toLowerCase()).slice(0,220);
+    if(seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
 }
 
 function topicFromDefinition(content){
@@ -160,7 +216,7 @@ function distractDefinition(correct, pool){
 
 function makeQuestions(text,count){
   const items=parseCourse(text);
-  if(items.length<3) throw new Error("Je n’ai pas trouvé assez de définitions, propriétés, méthodes ou règles.");
+  if(items.length<1) throw new Error("Je n’ai pas réussi à exploiter ce document. Essaie un PDF avec du texte sélectionnable ou une image plus nette.");
 
   const definitionBodies=items
     .filter(x=>x.type==="definition")
@@ -291,6 +347,38 @@ function makeQuestions(text,count){
       });
     }
   });
+
+  // Fallback pédagogique : si le document contient peu de blocs balisés,
+  // on crée des questions de compréhension à partir des phrases-clés.
+  if(qs.length<count){
+    const sourceSentences = norm(text)
+      .replace(/DéOinition/gi,"Définition")
+      .split(/(?<=[.!?])\s+|\n+/)
+      .map(s=>s.trim())
+      .filter(s=>s.length>=25 && s.length<=220)
+      .filter(s=>/est une|est un|signifie|permet de|pour .* il (?:faut|suffit)|on (?:ajoute|recopie|multiplie|applique|additionne|soustrait)|est égal à/i.test(s));
+
+    sourceSentences.forEach((s,i)=>{
+      let question="Quelle affirmation est correcte d’après le cours ?";
+      if(/pour .* il (?:faut|suffit)/i.test(s)) question="Quelle méthode est correcte d’après le cours ?";
+      else if(/est une|est un|signifie/i.test(s)) question="Quelle définition est correcte d’après le cours ?";
+
+      const wrongPool=[
+        "Cette affirmation n’apparaît pas dans le cours.",
+        "On applique toujours la règle inverse.",
+        "On peut effectuer l’opération sans tenir compte des signes."
+      ];
+
+      qs.push({
+        id:"fallback-"+i,
+        q:question,
+        o:shuffle([s,...wrongPool]),
+        a:s,
+        x:`Le cours indique : « ${s} »`,
+        s:s
+      });
+    });
+  }
 
   // Déduplication et sélection
   const seen=new Set();
@@ -538,7 +626,7 @@ function App(){
 
         <section className="mt-5 bg-slate-900 text-white rounded-3xl p-5">
           <h2 className="font-black flex gap-2 items-center"><Icon name="wand-sparkles"/> Nouveau moteur</h2>
-          <p className="mt-2 text-sm text-slate-200">Les questions sont maintenant fabriquées à partir des définitions, propriétés, méthodes, règles, formules et exemples repérés dans le cours. Plus de mots choisis au hasard.</p>
+          <p className="mt-2 text-sm text-slate-200">Le moteur accepte désormais aussi les PDF Notability imparfaitement lus : il repère les définitions, propriétés, méthodes, règles et formules, puis utilise un mode de secours sur les phrases importantes si nécessaire.</p>
         </section>
       </div>
       <Toast value={toast} onClose={()=>setToast(null)}/>
