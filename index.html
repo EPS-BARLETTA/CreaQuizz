@@ -12,6 +12,7 @@
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://unpkg.com/lucide@latest"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
   <style>
@@ -320,18 +321,74 @@ function buildQuiz(text,count){
 }
 
 async function extractPdfText(file,onProgress){
-  const pdfjs=await import("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs");
-  pdfjs.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
+  if(!window.pdfjsLib){
+    throw new Error("Le lecteur PDF n’a pas pu être chargé. Recharge la page puis réessaie.");
+  }
 
-  const pdf=await pdfjs.getDocument({data:await file.arrayBuffer()}).promise;
-  const pages=[];
+  pdfjsLib.GlobalWorkerOptions.workerSrc=
+    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+  const buffer=await file.arrayBuffer();
+  const pdf=await pdfjsLib.getDocument({data:buffer}).promise;
+  const extracted=[];
+
   for(let p=1;p<=pdf.numPages;p++){
     onProgress(`Lecture du PDF : page ${p}/${pdf.numPages}`);
     const page=await pdf.getPage(p);
-    const tc=await page.getTextContent();
-    pages.push(tc.items.map(x=>x.str).join(" "));
+    const content=await page.getTextContent();
+
+    const line=content.items
+      .map(item=>item.str||"")
+      .join(" ")
+      .replace(/\s+/g," ")
+      .trim();
+
+    if(line.length>8) extracted.push(line);
   }
-  return normalizeText(pages.join("\n"));
+
+  let text=normalizeText(extracted.join("\n"));
+
+  if(text.length<120){
+    if(!window.Tesseract){
+      throw new Error("Le PDF ne contient pas de texte sélectionnable et le module OCR n’est pas disponible.");
+    }
+
+    const ocrPages=[];
+    const maxPages=Math.min(pdf.numPages,8);
+
+    for(let p=1;p<=maxPages;p++){
+      onProgress(`OCR du PDF : page ${p}/${maxPages}`);
+      const page=await pdf.getPage(p);
+      const viewport=page.getViewport({scale:1.6});
+
+      const canvas=document.createElement("canvas");
+      const ctx=canvas.getContext("2d",{willReadFrequently:true});
+      canvas.width=Math.ceil(viewport.width);
+      canvas.height=Math.ceil(viewport.height);
+
+      await page.render({canvasContext:ctx,viewport}).promise;
+
+      const result=await Tesseract.recognize(canvas,"fra",{
+        logger:m=>{
+          if(m.status==="recognizing text"){
+            const pct=Math.round((m.progress||0)*100);
+            onProgress(`OCR du PDF : page ${p}/${maxPages} · ${pct}%`);
+          }
+        }
+      });
+
+      const pageText=normalizeText(result?.data?.text||"");
+      if(pageText.length>10) ocrPages.push(pageText);
+    }
+
+    text=normalizeText(ocrPages.join("\n"));
+  }
+
+  if(text.length<80){
+    throw new Error("Je n’arrive pas à lire suffisamment de texte dans ce PDF. Dans Notability, exporte la note en PDF puis choisis « Enregistrer dans Fichiers », ou exporte une page en image.");
+  }
+
+  return text;
 }
 
 async function ocrImage(file,onProgress){
@@ -791,9 +848,13 @@ function App(){
       <section className="bg-white border border-slate-200 rounded-3xl p-5 sm:p-7 shadow-soft">
         <h2 className="text-xl font-black">1. Importer le cours</h2>
 
+        <div className="mt-3 rounded-2xl bg-sky-50 border border-sky-200 p-4 text-sm text-sky-950">
+          <strong>Notability sur iPad :</strong> dans la note, fais <strong>Partager → PDF → Enregistrer dans Fichiers</strong>. Ensuite reviens ici et choisis ce PDF.
+        </div>
+
         <label className="tap mt-4 w-full rounded-2xl border-2 border-dashed border-indigo-300 bg-indigo-50 hover:bg-indigo-100 cursor-pointer px-4 py-6 flex items-center justify-center gap-3 text-indigo-900 font-black">
           <Icon name="upload"/>
-          <span>{filename||"PDF Notability, photo ou fichier texte"}</span>
+          <span>{filename||"PDF Notability depuis Fichiers, photo ou fichier texte"}</span>
           <input className="sr-only" type="file" accept=".pdf,image/*,.txt,.md,.csv" onChange={handleFile}/>
         </label>
 
