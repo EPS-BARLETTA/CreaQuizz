@@ -1,10 +1,22 @@
-import { put } from '@vercel/blob';
+import { put, get } from '@vercel/blob';
 
 function makeId() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let id = '';
   for (let i = 0; i < 8; i++) id += chars[Math.floor(Math.random() * chars.length)];
   return id;
+}
+
+async function readIndex() {
+  try {
+    const result = await get('quizzes/index.json', { access: 'private', useCache: false });
+    if (!result) return [];
+    const text = await new Response(result.stream).text();
+    const data = JSON.parse(text);
+    return Array.isArray(data?.items) ? data.items : [];
+  } catch {
+    return [];
+  }
 }
 
 export default async function handler(req, res) {
@@ -24,12 +36,14 @@ export default async function handler(req, res) {
     }
 
     const id = makeId();
+    const createdAt = payload.createdAt || new Date().toISOString();
+    const title = String(payload.title || 'Quizz').slice(0, 100);
     const pathname = `quizzes/${id}.json`;
     const data = JSON.stringify({
-      app: 'quizz-maths',
-      version: 4,
-      title: String(payload.title || 'Quizz Maths').slice(0, 100),
-      createdAt: payload.createdAt || new Date().toISOString(),
+      app: 'quizz',
+      version: 5,
+      title,
+      createdAt,
       questions: payload.questions,
     });
 
@@ -37,6 +51,17 @@ export default async function handler(req, res) {
       access: 'private',
       contentType: 'application/json; charset=utf-8',
       addRandomSuffix: false,
+    });
+
+    const current = await readIndex();
+    const entry = { id, title, count: payload.questions.length, createdAt };
+    const items = [entry, ...current.filter((x) => x?.id !== id)].slice(0, 100);
+
+    await put('quizzes/index.json', JSON.stringify({ items }), {
+      access: 'private',
+      contentType: 'application/json; charset=utf-8',
+      addRandomSuffix: false,
+      allowOverwrite: true,
     });
 
     res.setHeader('Cache-Control', 'no-store');
