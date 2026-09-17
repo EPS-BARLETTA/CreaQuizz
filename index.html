@@ -1,1 +1,531 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#4f46e5" />
+  <meta name="color-scheme" content="light" />
+  <title>Quizz Maths</title>
 
+  <!-- UI / React -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <!-- Partage / QR -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.5.0/lz-string.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+  <!-- PDF -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs" type="module"></script>
+
+  <!-- OCR images -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+  <style>
+    :root { --focus:#111827; }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; }
+    body { margin:0; min-width:320px; background:#f8fafc; color:#0f172a; }
+    button,input,textarea,select { font:inherit; }
+    button,[role="button"] { touch-action:manipulation; }
+    :focus-visible { outline:3px solid var(--focus); outline-offset:3px; }
+    .tap { min-height:48px; min-width:48px; }
+    .shadow-soft { box-shadow:0 14px 35px rgba(15,23,42,.08); }
+    .fade { animation:fade .22s ease-out both; }
+    .pop { animation:pop .28s ease-out both; }
+    @keyframes fade { from{opacity:0;transform:translateY(7px)} to{opacity:1;transform:none} }
+    @keyframes pop { 0%{opacity:.3;transform:scale(.97)} 70%{transform:scale(1.02)} 100%{opacity:1;transform:scale(1)} }
+    @media (prefers-reduced-motion:reduce){
+      *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important}
+    }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const {useEffect,useMemo,useRef,useState} = React;
+
+/* =========================================================
+   UTILITAIRES
+========================================================= */
+
+const EXAMPLE = `Fractions
+Une fraction représente une ou plusieurs parts égales d'une unité.
+Le numérateur est le nombre placé au-dessus de la barre de fraction.
+Le dénominateur est le nombre placé sous la barre de fraction.
+Deux fractions sont équivalentes si elles représentent la même quantité.
+Pour additionner deux fractions de même dénominateur, on additionne les numérateurs et on garde le même dénominateur.
+Exemple : 2/7 + 3/7 = 5/7.`;
+
+const GOOD = ["Bravo !","Excellent !","Bien joué !","Super !","Tu maîtrises !","Continue comme ça !"];
+const BAD = ["Pas encore. Utilise l’indice.","Presque ! Regarde le cours.","Tu peux retenter.","Bonne tentative. Cherche l’idée-clé."];
+
+function shuffle(a,r=Math.random){
+  const x=[...a];
+  for(let i=x.length-1;i>0;i--){const j=Math.floor(r()*(i+1));[x[i],x[j]]=[x[j],x[i]]}
+  return x;
+}
+function xmur3(str){let h=1779033703^str.length;for(let i=0;i<str.length;i++){h=Math.imul(h^str.charCodeAt(i),3432918353);h=h<<13|h>>>19}return()=>{h=Math.imul(h^(h>>>16),2246822507);h=Math.imul(h^(h>>>13),3266489909);return(h^=h>>>16)>>>0}}
+function mulberry32(a){return()=>{let t=a+=0x6D2B79F5;t=Math.imul(t^t>>>15,t|1);t^=t+Math.imul(t^t>>>7,t|61);return((t^t>>>14)>>>0)/4294967296}}
+function seeded(s){return mulberry32(xmur3(s)())}
+function norm(t){return String(t||"").replace(/\r/g,"\n").replace(/[ \t]+/g," ").replace(/\n{3,}/g,"\n\n").trim()}
+function facts(text){
+  return norm(text).split(/\n|(?<=[.!?])\s+/).map(s=>s.replace(/^[•\-–—]\s*/,"").trim()).filter(s=>s.length>=10&&s.length<=280);
+}
+function terms(s){
+  const stop=new Set(["avec","dans","pour","sans","sous","sur","entre","comme","plus","moins","une","des","les","est","sont","être","avoir","qui","que","quoi","dont","elle","elles","ils","nous","vous","leur","leurs","par","aux","ses","ces","cette","cet","donc","puis","alors","même"]);
+  return s.replace(/[^\p{L}\p{N}\/+\-×÷=,. ]/gu," ").split(/\s+/).map(w=>w.replace(/[,.]/g,"")).filter(w=>w.length>3&&!stop.has(w.toLowerCase()));
+}
+function distractors(ans,pool,r){
+  const generic=["numérateur","dénominateur","produit","somme","différence","quotient","multiple","fraction","unité","valeur"];
+  return shuffle([...new Set([...pool,...generic])],r).filter(x=>x.toLowerCase()!==ans.toLowerCase()).slice(0,3);
+}
+function buildQuiz(text,count,level){
+  const fs=facts(text);
+  if(fs.length<2) throw new Error("Le contenu est trop court. Ajoute au moins deux règles, définitions ou exemples.");
+  const r=seeded(text+"|"+count+"|"+level);
+  const all=[...new Set(fs.flatMap(terms))];
+  const qs=[];
+
+  fs.forEach((f,i)=>{
+    const ts=terms(f);
+    const eq=f.match(/([0-9]+(?:[.,][0-9]+)?(?:\s*[/×x*+\-÷]\s*[0-9]+(?:[.,][0-9]+)?)+\s*=\s*[0-9]+(?:[.,][0-9]+)?)/);
+    const def=f.match(/^(.{2,60}?)\s+(?:est|sont|représente|représentent|signifie|désigne)\s+(.{5,170})[.!]?$/i);
+
+    if(eq){
+      const [left,right]=eq[1].split("=").map(x=>x.trim());
+      const n=Number(right.replace(",","."));
+      let opts=[right];
+      if(Number.isFinite(n)) opts.push(String(n+1),String(Math.max(0,n-1)),String(n+2));
+      else opts.push(...distractors(right,all,r));
+      qs.push({id:"e"+i,q:`Quel est le résultat de ${left} ?`,o:shuffle([...new Set(opts)].slice(0,4),r),a:right,h:`Relis cet exemple : « ${f} »`,x:`Le cours donne : ${eq[1]}.`,s:f});
+    }
+
+    if(def){
+      const subject=def[1].trim(), body=def[2].replace(/[.!]$/,"").trim();
+      const correct=body.length<=95?body:body.slice(0,92)+"…";
+      let others=fs.filter((_,j)=>j!==i).map(z=>z.replace(/^[^.!?]{0,55}?\s+(?:est|sont|représente|représentent|signifie|désigne)\s+/i,"").replace(/[.!]$/,"").trim()).filter(z=>z.length>4&&z.length<=95&&z.toLowerCase()!==correct.toLowerCase());
+      let o=shuffle([correct,...others],r);
+      o=[...new Set(o)].slice(0,4);
+      while(o.length<4){
+        const fb=["une autre propriété","une valeur différente","une règle inverse","une autre définition"][o.length-1]||"une autre définition";
+        if(!o.includes(fb))o.push(fb);
+      }
+      qs.push({id:"d"+i,q:`Quelle proposition décrit correctement « ${subject} » ?`,o:shuffle(o,r),a:correct,h:`Cherche la phrase qui commence par « ${subject} »`,x:`Dans le cours : « ${f} »`,s:f});
+    }
+
+    if(ts.length){
+      const a=ts[Math.floor(r()*Math.min(ts.length,4))];
+      const m=f.replace(new RegExp(`\\b${a.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")}\\b`,"i"),"_____");
+      const ds=distractors(a,all,r);
+      if(ds.length>=2) qs.push({id:"c"+i,q:`Complète : ${m}`,o:shuffle([a,...ds].slice(0,4),r),a,h:`Le mot apparaît ici : « ${f.slice(0,130)}${f.length>130?"…":""} »`,x:`La phrase complète est : « ${f} »`,s:f});
+    }
+
+    const nums=f.match(/\d+(?:[.,]\d+)?/g);
+    let ff=null;
+    if(nums?.length){const first=nums[0];ff=f.replace(first,String(Number(first.replace(",","."))+1))}
+    if(ff){
+      const truth=r()>.5;
+      qs.push({id:"v"+i,q:`Cette affirmation est-elle correcte ? « ${truth?f:ff} »`,o:["Vrai","Faux"],a:truth?"Vrai":"Faux",h:"Compare avec la formulation exacte du cours.",x:`La formulation du cours est : « ${f} »`,s:f});
+    }
+  });
+
+  const uniq=[]; const seen=new Set();
+  for(const q of shuffle(qs,r)){const k=q.q.toLowerCase();if(!seen.has(k)){seen.add(k);uniq.push(q)}}
+  const base=[...uniq];
+  let k=0;
+  while(uniq.length<count&&base.length){const b=base[k%base.length];uniq.push({...b,id:b.id+"r"+k,q:b.q+(k%2?"":" ")});k++}
+  return uniq.slice(0,count);
+}
+function encodeShare(quiz,title,level){return LZString.compressToEncodedURIComponent(JSON.stringify({v:2,title,level,quiz}))}
+function decodeShare(s){const raw=LZString.decompressFromEncodedURIComponent(s);if(!raw)throw Error("Lien invalide");const d=JSON.parse(raw);if(!Array.isArray(d.quiz))throw Error("Quiz invalide");return d}
+function download(name,content,type="text/plain;charset=utf-8"){const b=new Blob([content],{type});const u=URL.createObjectURL(b);const a=document.createElement("a");a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),500)}
+
+async function extractPdfText(file,onProgress){
+  const ab=await file.arrayBuffer();
+  const pdfjs=await import("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs");
+  pdfjs.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
+  const pdf=await pdfjs.getDocument({data:ab}).promise;
+  let out=[];
+  for(let p=1;p<=pdf.numPages;p++){
+    onProgress?.(`Lecture du PDF : page ${p}/${pdf.numPages}`);
+    const page=await pdf.getPage(p);
+    const tc=await page.getTextContent();
+    out.push(tc.items.map(x=>x.str).join(" "));
+  }
+  return norm(out.join("\n"));
+}
+
+async function ocrImage(file,onProgress){
+  if(!window.Tesseract) throw Error("Le module OCR n’a pas pu être chargé.");
+  const result=await Tesseract.recognize(file,"fra",{
+    logger:m=>{
+      if(m.status==="recognizing text") onProgress?.(`OCR de l’image : ${Math.round((m.progress||0)*100)} %`);
+      else if(m.status) onProgress?.("OCR : "+m.status);
+    }
+  });
+  return norm(result?.data?.text||"");
+}
+
+/* =========================================================
+   UI
+========================================================= */
+function Icon({name,size=20}){
+  const ref=useRef(null);
+  useEffect(()=>{if(ref.current&&window.lucide){ref.current.innerHTML=`<i data-lucide="${name}"></i>`;window.lucide.createIcons({attrs:{width:size,height:size,"aria-hidden":"true"}})}},[name,size]);
+  return <span ref={ref} className="inline-flex shrink-0" aria-hidden="true"/>;
+}
+function Toast({t,close}){
+  useEffect(()=>{if(!t)return;const id=setTimeout(close,3500);return()=>clearTimeout(id)},[t]);
+  if(!t)return null;
+  return <div className="fixed z-50 left-3 right-3 bottom-4 flex justify-center" aria-live="polite"><div className={`max-w-lg w-full rounded-2xl px-4 py-3 shadow-soft border flex gap-3 font-semibold ${t.type==="error"?"bg-rose-50 border-rose-200 text-rose-900":t.type==="success"?"bg-emerald-50 border-emerald-200 text-emerald-900":"bg-white border-slate-200"}`}><Icon name={t.type==="error"?"circle-alert":t.type==="success"?"circle-check":"info"}/><span className="flex-1">{t.msg}</span><button className="tap -m-2 p-2" onClick={close} aria-label="Fermer"><Icon name="x"/></button></div></div>
+}
+function Modal({open,title,children,onClose}){
+  if(!open)return null;
+  return <div className="fixed inset-0 z-40 bg-slate-950/55 p-3 flex items-end sm:items-center justify-center" onMouseDown={e=>{if(e.target===e.currentTarget)onClose()}}>
+    <section role="dialog" aria-modal="true" className="bg-white rounded-3xl w-full max-w-xl max-h-[90vh] overflow-auto shadow-soft">
+      <header className="sticky top-0 bg-white border-b px-5 py-4 flex items-center gap-3"><h2 className="font-black text-lg flex-1">{title}</h2><button className="tap rounded-xl" onClick={onClose} aria-label="Fermer"><Icon name="x"/></button></header>
+      <div className="p-5">{children}</div>
+    </section>
+  </div>
+}
+
+function App(){
+  const [screen,setScreen]=useState("builder");
+  const [title,setTitle]=useState("Quizz Maths");
+  const [level,setLevel]=useState("Tous niveaux");
+  const [course,setCourse]=useState(EXAMPLE);
+  const [count,setCount]=useState(15);
+  const [quiz,setQuiz]=useState([]);
+  const [fileName,setFileName]=useState("");
+  const [preview,setPreview]=useState("");
+  const [busy,setBusy]=useState("");
+  const [toast,setToast]=useState(null);
+  const [modal,setModal]=useState(null);
+  const [shared,setShared]=useState(false);
+  const [savedQuizzes,setSavedQuizzes]=useState(()=>{
+    try{return JSON.parse(localStorage.getItem("quizz-maths-library")||"[]")}catch{return []}
+  });
+  const qrRef=useRef(null);
+
+  const [idx,setIdx]=useState(0);
+  const [sel,setSel]=useState("");
+  const [tries,setTries]=useState({});
+  const [answers,setAnswers]=useState({});
+  const [hint,setHint]=useState(false);
+  const [fb,setFb]=useState(null);
+
+  useEffect(()=>{
+    const m=(location.hash||"").match(/(?:^#|&)quiz=([^&]+)/);
+    if(m){try{const d=decodeShare(m[1]);setTitle(d.title||"Quizz Maths");setLevel(d.level||"");setQuiz(d.quiz);setShared(true);setScreen("intro")}catch{setToast({type:"error",msg:"Le QR code ou le lien n’est pas valide."})}}
+  },[]);
+
+  const q=quiz[idx];
+  const correct=Object.values(answers).filter(a=>a.correct).length;
+  const progress=quiz.length?Math.round((idx/quiz.length)*100):0;
+
+  function resetRun(){setIdx(0);setSel("");setTries({});setAnswers({});setHint(false);setFb(null)}
+  function start(){resetRun();setScreen("quiz")}
+  function generate(){try{const qs=buildQuiz(course,count,level);setQuiz(qs);setShared(false);setScreen("intro");setToast({type:"success",msg:`${qs.length} questions générées.`})}catch(e){setToast({type:"error",msg:e.message})}}
+
+  async function handleFile(e){
+    const f=e.target.files?.[0]; if(!f)return;
+    setFileName(f.name);
+    if(preview){URL.revokeObjectURL(preview);setPreview("")}
+    try{
+      if(f.type==="application/pdf"||f.name.toLowerCase().endsWith(".pdf")){
+        setBusy("Ouverture du PDF…");
+        const txt=await extractPdfText(f,setBusy);
+        if(!txt||txt.length<20) throw Error("Le PDF ne contient presque pas de texte exploitable. Exporte-le depuis Notability avec texte/OCR, ou utilise une image.");
+        setCourse(txt);setBusy("");setToast({type:"success",msg:"PDF importé. Le texte a été récupéré automatiquement."});return;
+      }
+      if(f.type.startsWith("image/")){
+        const url=URL.createObjectURL(f);setPreview(url);setBusy("Préparation de l’OCR…");
+        const txt=await ocrImage(f,setBusy);
+        setBusy("");
+        if(txt.length<10) throw Error("Je n’ai pas réussi à lire suffisamment de texte sur cette image.");
+        setCourse(txt);setToast({type:"success",msg:"Image lue par OCR. Vérifie le texte avant de générer le quiz."});return;
+      }
+      if(f.type.startsWith("text/")||/\.(txt|md|csv)$/i.test(f.name)){
+        setCourse(norm(await f.text()));setToast({type:"success",msg:"Fichier texte importé."});return;
+      }
+      throw Error("Format non pris en charge. Utilise PDF, image, TXT, MD ou CSV.");
+    }catch(err){setBusy("");setToast({type:"error",msg:err.message||"Import impossible."})}
+  }
+
+  function submit(){
+    if(!sel||!q||fb?.locked)return;
+    const ok=sel===q.a;
+    const n=1;
+    setTries(v=>({...v,[q.id]:n}));
+    setAnswers(v=>({...v,[q.id]:{selected:sel,correct:ok,attempts:n}}));
+    if(ok){
+      setFb({correct:true,locked:true,msg:GOOD[(idx+n)%GOOD.length]});
+    }else{
+      setHint(true);
+      setFb({correct:false,locked:true,msg:`Bonne réponse : ${q.a}`});
+    }
+  }
+  function next(){if(idx+1>=quiz.length){setScreen("results");window.scrollTo(0,0)}else{setIdx(i=>i+1);setSel("");setHint(false);setFb(null);window.scrollTo({top:0,behavior:"smooth"})}}
+
+  function persistLibrary(items){
+    setSavedQuizzes(items);
+    try{localStorage.setItem("quizz-maths-library",JSON.stringify(items))}catch{}
+  }
+
+  function saveCurrentQuiz(url){
+    const item={
+      id:Date.now().toString(),
+      title:title||"Quizz Maths",
+      level:level||"Tous niveaux",
+      url,
+      createdAt:new Date().toISOString()
+    };
+    const existing=savedQuizzes.filter(x=>x.url!==url);
+    persistLibrary([item,...existing].slice(0,50));
+    return item;
+  }
+
+  function removeSavedQuiz(id){
+    persistLibrary(savedQuizzes.filter(x=>x.id!==id));
+  }
+
+  function openSavedQuiz(item){
+    try{
+      const m=item.url.match(/#quiz=([^&]+)/);
+      if(!m) throw Error();
+      const d=decodeShare(m[1]);
+      setTitle(d.title||item.title||"Quizz Maths");
+      setLevel(d.level||item.level||"");
+      setQuiz(d.quiz);
+      setShared(false);
+      setScreen("intro");
+      history.replaceState(null,"",location.pathname+location.search);
+      setToast({type:"success",msg:"Quiz restauré depuis la bibliothèque."});
+    }catch{
+      setToast({type:"error",msg:"Impossible de restaurer ce quiz."});
+    }
+  }
+
+  function shareQuiz(){
+    const enc=encodeShare(quiz,title,level);
+    const url=location.href.split("#")[0]+"#quiz="+enc;
+    if(enc.length>2800){setToast({type:"error",msg:"Le quiz est trop gros pour un QR fiable. Réduis le nombre de questions ou raccourcis le cours."});return}
+    saveCurrentQuiz(url);
+    setModal({type:"qr",url,len:enc.length});
+    setToast({type:"success",msg:"QR généré et quiz sauvegardé automatiquement."});
+  }
+  useEffect(()=>{
+    if(modal?.type!=="qr"||!qrRef.current)return;
+    qrRef.current.innerHTML="";
+    new QRCode(qrRef.current,{text:modal.url,width:240,height:240,correctLevel:QRCode.CorrectLevel.L});
+  },[modal]);
+
+  function exportCsv(){
+    const rows=[["Question","Réponse","Bonne réponse","Résultat","Tentatives"]];
+    quiz.forEach(x=>{const a=answers[x.id]||{};rows.push([x.q,a.selected||"",x.a,a.correct?"Correct":"À revoir",a.attempts||0])});
+    const csv=rows.map(r=>r.map(x=>`"${String(x).replace(/"/g,'""')}"`).join(";")).join("\n");
+    download("bilan-quizz-maths.csv","\ufeff"+csv,"text/csv;charset=utf-8");
+  }
+
+  if(screen==="builder"){
+    return <main className="min-h-screen">
+      <header className="bg-gradient-to-br from-indigo-700 via-violet-700 to-fuchsia-700 text-white">
+        <div className="max-w-5xl mx-auto px-4 py-8 sm:py-10 flex gap-4">
+          <div className="w-14 h-14 rounded-2xl bg-white/15 grid place-items-center"><Icon name="sigma" size={30}/></div>
+          <div><p className="uppercase tracking-[.2em] text-xs font-bold text-indigo-100">Créateur de quiz</p><h1 className="text-3xl sm:text-4xl font-black mt-1">Quizz Maths</h1><p className="mt-2 text-indigo-100 max-w-2xl">Tous niveaux · import Notability/PDF · photo/OCR · quiz · QR élève</p></div>
+        </div>
+      </header>
+
+      <div className="max-w-5xl mx-auto px-4 py-6 grid lg:grid-cols-[1.2fr_.8fr] gap-5">
+        <section className="bg-white border border-slate-200 rounded-3xl p-5 shadow-soft">
+          <h2 className="text-xl font-black flex items-center gap-2"><Icon name="file-up"/> 1. Importer le cours</h2>
+          <p className="text-slate-600 mt-2">Depuis Notability, exporte ta note en <strong>PDF</strong>, puis choisis ce PDF ici. Tu peux aussi importer une photo ou une image.</p>
+
+          <label className="mt-4 tap w-full border-2 border-dashed border-indigo-300 rounded-2xl px-4 py-5 bg-indigo-50 hover:bg-indigo-100 cursor-pointer flex items-center justify-center gap-3 font-black text-indigo-900">
+            <Icon name="upload"/><span>{fileName||"PDF Notability, image ou fichier texte"}</span>
+            <input className="sr-only" type="file" accept=".pdf,image/*,.txt,.md,.csv,application/pdf,text/plain,text/markdown,text/csv" onChange={handleFile}/>
+          </label>
+
+          {busy&&<div className="mt-4 rounded-2xl bg-amber-50 border border-amber-200 p-4 text-amber-950 font-bold flex gap-3 items-center"><Icon name="loader-circle"/><span>{busy}</span></div>}
+          {preview&&<div className="mt-4 border rounded-2xl overflow-hidden bg-slate-100"><img src={preview} alt="Aperçu du document importé" className="w-full max-h-72 object-contain"/></div>}
+
+          <label className="block mt-5 font-black" htmlFor="course">2. Contenu du cours à transformer en quiz</label>
+          <p className="text-sm text-slate-600 mt-1">Le texte récupéré du PDF ou de l’image apparaît ici. Tu peux le corriger avant de générer le quiz.</p>
+          <textarea id="course" value={course} onChange={e=>setCourse(e.target.value)} className="mt-2 w-full min-h-72 rounded-2xl border border-slate-300 p-4 leading-relaxed" />
+
+          <div className="mt-5 grid sm:grid-cols-3 gap-4">
+            <label className="font-black">Titre
+              <input value={title} onChange={e=>setTitle(e.target.value.slice(0,60))} className="mt-2 w-full tap rounded-xl border border-slate-300 px-3"/>
+            </label>
+            <label className="font-black">Niveau
+              <select value={level} onChange={e=>setLevel(e.target.value)} className="mt-2 w-full tap rounded-xl border border-slate-300 px-3 bg-white">
+                {["Tous niveaux","6e","5e","4e","3e","Seconde","Première","Terminale"].map(x=><option key={x}>{x}</option>)}
+              </select>
+            </label>
+            <label className="font-black">Questions
+              <select value={count} onChange={e=>setCount(Number(e.target.value))} className="mt-2 w-full tap rounded-xl border border-slate-300 px-3 bg-white">
+                {[10,15,20,25,30].map(x=><option key={x} value={x}>{x}</option>)}
+              </select>
+            </label>
+          </div>
+
+          <button onClick={generate} disabled={!!busy} className="tap mt-5 w-full rounded-2xl bg-indigo-700 disabled:bg-slate-300 text-white font-black px-5 py-3 flex items-center justify-center gap-2"><Icon name="sparkles"/> Générer le quiz</button>
+        </section>
+
+        <aside className="space-y-5">
+          <section className="bg-white border border-slate-200 rounded-3xl p-5 shadow-soft">
+            <h2 className="font-black flex gap-2 items-center"><Icon name="notebook-tabs"/> Import depuis Notability</h2>
+            <ol className="mt-3 text-sm text-slate-700 space-y-2 list-decimal pl-5">
+              <li>Dans Notability, ouvre la note.</li>
+              <li>Partager / Exporter.</li>
+              <li>Choisis <strong>PDF</strong>.</li>
+              <li>Enregistre dans Fichiers ou partage directement vers le navigateur si proposé.</li>
+              <li>Importe le PDF dans Quizz Maths.</li>
+            </ol>
+          </section>
+          <section className="bg-emerald-50 border border-emerald-200 rounded-3xl p-5">
+            <h2 className="font-black text-emerald-950 flex gap-2 items-center"><Icon name="qr-code"/> QR élève</h2>
+            <p className="mt-2 text-sm text-emerald-900">Le QR sert uniquement à ouvrir le quiz sur le téléphone de l’élève. Aucun compte, aucune donnée nominative et aucun espace élève à créer.</p>
+          </section>
+
+          <section className="bg-white border border-slate-200 rounded-3xl p-5 shadow-soft">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="font-black flex gap-2 items-center"><Icon name="library"/> Bibliothèque de quiz</h2>
+              <span className="text-xs font-bold text-slate-500">{savedQuizzes.length} sauvegardé{savedQuizzes.length>1?"s":""}</span>
+            </div>
+            <p className="mt-2 text-sm text-slate-600">Chaque QR généré est sauvegardé automatiquement sur cet appareil.</p>
+
+            {savedQuizzes.length===0 ? (
+              <p className="mt-4 rounded-2xl bg-slate-50 border border-slate-200 p-4 text-sm text-slate-600">Aucun quiz sauvegardé pour le moment.</p>
+            ) : (
+              <div className="mt-4 space-y-3 max-h-80 overflow-auto pr-1">
+                {savedQuizzes.map(item=>(
+                  <div key={item.id} className="rounded-2xl border border-slate-200 p-3">
+                    <div className="font-black">{item.title}</div>
+                    <div className="mt-1 text-xs text-slate-500">{item.level} · {new Date(item.createdAt).toLocaleString("fr-FR")}</div>
+                    <div className="mt-3 grid grid-cols-3 gap-2">
+                      <button onClick={()=>openSavedQuiz(item)} className="tap rounded-xl bg-indigo-50 text-indigo-900 font-black text-sm px-2 flex items-center justify-center gap-1"><Icon name="folder-open" size={17}/> Ouvrir</button>
+                      <button onClick={()=>setModal({type:"qr",url:item.url,len:item.url.length})} className="tap rounded-xl bg-emerald-50 text-emerald-900 font-black text-sm px-2 flex items-center justify-center gap-1"><Icon name="qr-code" size={17}/> QR</button>
+                      <button onClick={()=>removeSavedQuiz(item.id)} className="tap rounded-xl bg-rose-50 text-rose-900 font-black text-sm px-2 flex items-center justify-center gap-1"><Icon name="trash-2" size={17}/> Suppr.</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </aside>
+      </div>
+      <Toast t={toast} close={()=>setToast(null)}/>
+    </main>
+  }
+
+  if(screen==="intro"){
+    return <main className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-fuchsia-50 px-4 py-6">
+      <div className="max-w-2xl mx-auto">
+        {!shared&&<button onClick={()=>setScreen("builder")} className="tap px-3 rounded-xl flex gap-2 items-center font-bold"><Icon name="arrow-left"/> Modifier</button>}
+        <section className="mt-4 bg-white border border-slate-200 rounded-[2rem] p-6 sm:p-8 text-center shadow-soft fade">
+          <div className="w-20 h-20 mx-auto rounded-3xl bg-indigo-100 text-indigo-700 grid place-items-center"><Icon name="brain-circuit" size={42}/></div>
+          <p className="mt-5 uppercase tracking-[.18em] text-xs font-black text-indigo-700">{level}</p>
+          <h1 className="text-3xl sm:text-4xl font-black mt-2">{title}</h1>
+          <p className="text-slate-600 mt-3">{quiz.length} questions · correction immédiate · réponse expliquée · accès au cours</p>
+          <button onClick={start} className="tap mt-7 w-full rounded-2xl bg-indigo-700 text-white font-black py-4 px-5 flex items-center justify-center gap-2 text-lg"><Icon name="play"/> Commencer</button>
+          {!shared&&<button onClick={shareQuiz} className="tap mt-3 w-full rounded-2xl border-2 border-indigo-200 bg-indigo-50 text-indigo-900 font-black py-3 px-5 flex items-center justify-center gap-2"><Icon name="qr-code"/> Générer le QR code élève</button>}
+        </section>
+      </div>
+
+      <Modal open={modal?.type==="qr"} title="QR code élève" onClose={()=>setModal(null)}>
+        <div className="text-center">
+          <p className="text-slate-600">L’élève scanne ce QR et le quiz s’ouvre directement sur son téléphone. Ce QR est conservé dans ta bibliothèque sur cet appareil.</p>
+          <div ref={qrRef} className="mt-5 mx-auto w-[240px] min-h-[240px] grid place-items-center"></div>
+          <button onClick={()=>navigator.clipboard?.writeText(modal.url).then(()=>setToast({type:"success",msg:"Lien copié."})).catch(()=>setToast({type:"error",msg:"Copie impossible."}))} className="tap mt-5 w-full rounded-xl bg-slate-900 text-white font-black px-4 flex items-center justify-center gap-2"><Icon name="copy"/> Copier le lien</button>
+        </div>
+      </Modal>
+      <Toast t={toast} close={()=>setToast(null)}/>
+    </main>
+  }
+
+  if(screen==="quiz"&&q){
+    const tn=tries[q.id]||0;
+    return <main className="min-h-screen bg-slate-50">
+      <header className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b">
+        <div className="max-w-2xl mx-auto px-4 py-3">
+          <div className="flex justify-between text-sm font-bold"><span>Question {idx+1}/{quiz.length}</span><span>{correct} juste{correct>1?"s":""}</span></div>
+          <div className="mt-2 h-2 rounded-full bg-slate-200 overflow-hidden"><div className="h-full bg-indigo-600" style={{width:`${Math.max(progress,4)}%`}}/></div>
+        </div>
+      </header>
+
+      <div className="max-w-2xl mx-auto px-4 py-6">
+        <section className="bg-white rounded-3xl border border-slate-200 p-5 sm:p-7 shadow-soft fade">
+          <div className="flex gap-3 items-start"><span className="rounded-xl bg-indigo-100 text-indigo-800 font-black px-3 py-2">{idx+1}</span><h1 className="text-xl sm:text-2xl font-black leading-snug">{q.q}</h1></div>
+
+          <fieldset className="mt-6 space-y-3" disabled={fb?.locked}>
+            <legend className="sr-only">Choisis une réponse</legend>
+            {q.o.map((o,i)=>{
+              const active=sel===o;
+              let st=active?"border-indigo-600 bg-indigo-50 ring-2 ring-indigo-100":"border-slate-200 bg-white";
+              if(fb?.locked&&o===q.a)st="border-emerald-600 bg-emerald-50";
+              if(fb?.locked&&active&&o!==q.a)st="border-rose-500 bg-rose-50";
+              return <label key={i} className={`tap rounded-2xl border-2 p-4 flex gap-3 items-start cursor-pointer font-bold ${st}`}><input type="radio" name="answer" className="mt-1 w-5 h-5 accent-indigo-700" checked={active} onChange={()=>setSel(o)}/><span>{o}</span></label>
+            })}
+          </fieldset>
+
+          {hint&&<div className="mt-5 rounded-2xl bg-amber-50 border border-amber-200 p-4 pop"><div className="font-black text-amber-950 flex gap-2"><Icon name="lightbulb"/> Indice</div><p className="mt-1 text-amber-900">{q.h}</p></div>}
+          {fb&&<div className={`mt-5 rounded-2xl border p-4 pop ${fb.correct?"bg-emerald-50 border-emerald-200 text-emerald-950":"bg-rose-50 border-rose-200 text-rose-950"}`}>
+            <div className="font-black">{fb.msg}</div>
+            {fb.locked&&<>
+              <p className="mt-2 text-sm"><strong>Explication :</strong> {q.x}</p>
+              <details className="mt-3 rounded-xl bg-white/70 border border-current/10 p-3">
+                <summary className="cursor-pointer font-black flex items-center gap-2"><span>📘</span> Voir l’extrait du cours</summary>
+                <p className="mt-2 text-sm leading-relaxed">{q.s}</p>
+              </details>
+            </>}
+          </div>}
+
+          {!fb?.locked?
+            <div className="mt-5 grid sm:grid-cols-2 gap-3">
+              <button onClick={()=>setHint(v=>!v)} className="tap rounded-2xl border-2 border-amber-200 bg-amber-50 text-amber-950 font-black px-4 flex items-center justify-center gap-2"><Icon name="lightbulb"/> {hint?"Masquer l’indice":"Voir un indice"}</button>
+              <button onClick={submit} disabled={!sel} className="tap rounded-2xl bg-indigo-700 disabled:bg-slate-300 text-white font-black px-4 flex items-center justify-center gap-2"><Icon name="check"/> Valider</button>
+            </div>
+          :
+            <button onClick={next} className="tap mt-5 w-full rounded-2xl bg-slate-900 text-white font-black px-5 flex items-center justify-center gap-2">{idx+1===quiz.length?"Voir mon bilan":"Question suivante"} <Icon name="arrow-right"/></button>
+          }
+          <p className="mt-4 text-center text-xs text-slate-500">Une seule réponse par question · correction immédiate</p>
+        </section>
+      </div>
+    </main>
+  }
+
+  const percent=quiz.length?Math.round(correct/quiz.length*100):0;
+  const missed=quiz.filter(x=>!answers[x.id]?.correct);
+  return <main className="min-h-screen bg-gradient-to-br from-emerald-50 via-white to-indigo-50 px-4 py-6">
+    <div className="max-w-3xl mx-auto">
+      <section className="bg-white rounded-[2rem] border border-slate-200 p-6 sm:p-8 text-center shadow-soft fade">
+        <div className="w-20 h-20 mx-auto rounded-full bg-emerald-100 text-emerald-800 grid place-items-center"><Icon name="trophy" size={42}/></div>
+        <p className="uppercase tracking-[.18em] text-xs font-black text-emerald-700 mt-4">Bilan</p>
+        <h1 className="text-3xl font-black mt-1">{correct}/{quiz.length}</h1>
+        <p className="text-xl font-bold mt-1">{percent}%</p>
+      </section>
+
+      <section className="mt-5 bg-white rounded-3xl border border-slate-200 p-5 shadow-soft">
+        <h2 className="text-xl font-black flex gap-2 items-center"><Icon name="book-open-check"/> À revoir</h2>
+        {missed.length===0?<p className="mt-3 rounded-2xl bg-emerald-50 border border-emerald-200 p-4 text-emerald-900 font-bold">Tout est juste. Bravo !</p>:
+        <div className="mt-4 space-y-3">{missed.map((x,i)=><details key={x.id} className="rounded-2xl border p-4"><summary className="cursor-pointer font-black">Point {i+1} · {x.q}</summary><div className="mt-3 text-sm space-y-2"><p><strong>Bonne réponse :</strong> {x.a}</p><p><strong>Explication :</strong> {x.x}</p></div></details>)}</div>}
+      </section>
+
+      <div className="mt-5 grid sm:grid-cols-2 gap-3">
+        <button onClick={start} className="tap rounded-2xl bg-indigo-700 text-white font-black px-4 flex gap-2 items-center justify-center"><Icon name="rotate-ccw"/> Relancer le quiz</button>
+        <button onClick={exportCsv} className="tap rounded-2xl border-2 border-slate-300 bg-white font-black px-4 flex gap-2 items-center justify-center"><Icon name="download"/> Exporter le bilan</button>
+      </div>
+    </div>
+  </main>
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
