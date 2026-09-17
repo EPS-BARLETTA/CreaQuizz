@@ -11,9 +11,9 @@
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://unpkg.com/lucide@latest"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 
   <style>
     *{box-sizing:border-box}
@@ -33,55 +33,25 @@
 <div id="root"></div>
 
 <script type="text/babel">
-const {useEffect,useMemo,useRef,useState}=React;
+const {useEffect,useRef,useState}=React;
 
+// Stockage public anonyme du quiz publié.
+// Aucune donnée nominative élève n'est envoyée.
 const STORAGE_API="https://superjsonblob.com/api/jsonBlob";
 
-const SAMPLE=`Chapitre : Distributivité et produits remarquables
-
-Définition : Une expression littérale est une expression dans laquelle des nombres sont représentés par des lettres appelées variables.
-
-Définition : Un monôme est une expression littérale qui est le produit d'une partie numérique, appelée coefficient, par une partie littérale composée de lettres.
-
-Définition : La valeur numérique d'une expression littérale est le nombre obtenu en remplaçant les variables par les valeurs données.
-
-Définition : Une expression littérale réduite est une expression littérale qui ne contient plus de termes semblables.
-
-Méthode : Pour réduire une expression littérale, on additionne les termes semblables.
-
-Méthode : Pour additionner ou soustraire des termes semblables, on recopie leur partie littérale et on additionne ou soustrait leurs coefficients.
-
-Méthode : Pour calculer un produit algébrique de monômes, on multiplie les coefficients entre eux puis les parties littérales entre elles.
-
-Propriété : La distributivité simple permet de transformer un produit en une somme ou une différence.
-
-Règle : Pour supprimer des parenthèses précédées d'un signe +, on recopie les termes sans changer leur signe.
-
-Règle : Pour supprimer des parenthèses précédées d'un signe -, on recopie les termes en changeant leur signe.
-
-Règle : Pour supprimer des parenthèses précédées d'un signe de multiplication, on applique la distributivité.
-
-Définition : Des binômes conjugués sont des binômes qui ne diffèrent que par le signe de l'un de leurs termes.
-
-Propriété : Le carré d'une somme de deux termes est égal à la somme des carrés des deux termes augmentée du double produit de ces termes.
-
-Propriété : Le carré d'une différence de deux termes est égal à la somme des carrés des deux termes diminuée du double produit de ces termes.
-
-Propriété : Le produit de deux binômes conjugués est égal à la différence entre le carré du terme qui ne change pas de signe et le carré de celui qui change de signe.`;
-
-const ENCOURAGEMENT_OK=[
+const GOOD=[
   "Bravo ! C’est juste.",
-  "Très bien ! Continue comme ça.",
-  "Excellent, bonne réponse !",
+  "Très bien !",
+  "Excellent, continue comme ça !",
   "Bien joué !",
   "Parfait !"
 ];
 
-const ENCOURAGEMENT_BAD=[
-  "Pas cette fois, mais regarde l’explication.",
-  "Ce n’est pas grave : retiens la règle pour la suivante.",
-  "Bonne tentative. Voici ce qu’il fallait retenir.",
-  "Tu progresses : regarde le rappel du cours."
+const BAD=[
+  "Pas cette fois. Regarde l’explication.",
+  "Bonne tentative. Retenons la règle.",
+  "Ce n’est pas grave, la correction va t’aider.",
+  "Encore un petit effort, tu progresses."
 ];
 
 function Icon({name,size=20}){
@@ -95,362 +65,10 @@ function Icon({name,size=20}){
   return <span ref={ref} className="inline-flex shrink-0" aria-hidden="true"/>;
 }
 
-function normalizeText(t){
-  return String(t||"")
-    .replace(/\r/g,"\n")
-    .replace(/DéOinition/gi,"Définition")
-    .replace(/DeOinition/gi,"Définition")
-    .replace(/Définition/gi,"Définition")
-    .replace(/Propriété/gi,"Propriété")
-    .replace(/Méthode/gi,"Méthode")
-    .replace(/Règle/gi,"Règle")
-    .replace(/coefOicient/gi,"coefficient")
-    .replace(/sufOit/gi,"suffit")
-    .replace(/[ \t]+/g," ")
-    .replace(/\n{3,}/g,"\n\n")
-    .trim();
-}
-
-function cleanStatement(s){
-  return s
-    .replace(/[Ø]/g," ")
-    .replace(/\.{4,}/g," ")
-    .replace(/_{3,}/g," ")
-    .replace(/\s+/g," ")
-    .trim();
-}
-
-function isCleanFrench(s){
-  if(!s||s.length<18||s.length>240)return false;
-  if((s.match(/[A-Za-zÀ-ÿ]/g)||[]).length<12)return false;
-  const weird=(s.match(/[^\p{L}\p{N}\s'’.,;:!?+\-()²=\/]/gu)||[]).length;
-  if(weird>5)return false;
-  if(/[█■□]{2,}/.test(s))return false;
-  return true;
-}
-
-function extractPedagogicalItems(text){
-  let t=normalizeText(text);
-
-  // force des séparations devant les marqueurs pédagogiques, même sur PDF aplati
-  t=t
-    .replace(/\s+(Définition\s*:)/gi,"\n$1")
-    .replace(/\s+(Propriété\s*:)/gi,"\n$1")
-    .replace(/\s+(Méthode\s*:)/gi,"\n$1")
-    .replace(/\s+(Règle\s*:)/gi,"\n$1")
-    .replace(/\s+(Rappel\s*:)/gi,"\n$1")
-    .replace(/\s+(Remarque\s*:)/gi,"\n$1");
-
-  const chunks=t.split("\n").map(cleanStatement).filter(Boolean);
-  const items=[];
-
-  for(const raw of chunks){
-    const m=raw.match(/^(Définition|Propriété|Méthode|Règle|Rappel)\s*:\s*(.+)$/i);
-    if(m){
-      const type=m[1].toLowerCase();
-      let content=cleanStatement(m[2]);
-      // coupe si un autre marqueur s'est collé derrière
-      content=content.split(/\s+(?=Définition|Propriété|Méthode|Règle|Rappel)\s*:/i)[0].trim();
-      if(isCleanFrench(content))items.push({type,content});
-    }
-  }
-
-  // secours : phrases sémantiques propres
-  const sentences=t
-    .split(/(?<=[.!?])\s+|\n+/)
-    .map(cleanStatement)
-    .filter(isCleanFrench)
-    .filter(s=>/est une|est un|sont des|signifie|permet de|pour .* on |pour .* il faut|pour .* il suffit|on recopie|on additionne|on multiplie|on applique|est égal à/i.test(s));
-
-  for(const s of sentences){
-    const content=s.replace(/^(Définition|Propriété|Méthode|Règle|Rappel)\s*:\s*/i,"").trim();
-    if(!items.some(x=>x.content.toLowerCase()===content.toLowerCase())){
-      const type=/est une|est un|sont des|signifie/i.test(content)?"définition":
-                 /pour |on recopie|on additionne|on multiplie|on applique/i.test(content)?"méthode":"propriété";
-      items.push({type,content});
-    }
-  }
-
-  return items;
-}
-
-function parseDefinition(s){
-  const m=s.match(/^(.{2,80}?)\s+(est une|est un|sont des|signifie|désigne)\s+(.+)$/i);
-  if(!m)return null;
-  return {term:m[1].trim(),verb:m[2].trim(),definition:m[3].trim()};
-}
-
-function shuffle(a){
-  const x=[...a];
-  for(let i=x.length-1;i>0;i--){
-    const j=Math.floor(Math.random()*(i+1));
-    [x[i],x[j]]=[x[j],x[i]];
-  }
-  return x;
-}
-
-function sampleWrong(correct,pool,n=3){
-  return shuffle(pool.filter(x=>x!==correct)).slice(0,n);
-}
-
-function buildQuiz(text,count){
-  const items=extractPedagogicalItems(text);
-
-  const defs=items.map(x=>({...x,parsed:parseDefinition(x.content)})).filter(x=>x.parsed);
-  const methods=items.filter(x=>["méthode","règle","propriété","rappel"].includes(x.type) && isCleanFrench(x.content));
-
-  if(defs.length+methods.length<3){
-    throw new Error("Le document est lisible, mais je ne trouve pas assez de règles ou définitions propres pour fabriquer un quiz fiable.");
-  }
-
-  const questions=[];
-
-  // 1. définition -> explication
-  defs.forEach((d,i)=>{
-    const correct=d.parsed.definition;
-    const pool=defs.map(x=>x.parsed.definition).filter(isCleanFrench);
-    const opts=shuffle([correct,...sampleWrong(correct,pool,3)]);
-    if(opts.length>=2){
-      questions.push({
-        id:`def-forward-${i}`,
-        question:`Quelle définition correspond à « ${d.parsed.term} » ?`,
-        options:opts,
-        answer:correct,
-        hint:`Cherche dans le cours la définition de « ${d.parsed.term} ».`,
-        explanation:`${d.parsed.term} ${d.parsed.verb} ${correct}.`,
-        source:d.content
-      });
-    }
-  });
-
-  // 2. définition inverse
-  defs.forEach((d,i)=>{
-    const correct=d.parsed.term;
-    const pool=defs.map(x=>x.parsed.term);
-    const opts=shuffle([correct,...sampleWrong(correct,pool,3)]);
-    if(opts.length>=2){
-      questions.push({
-        id:`def-reverse-${i}`,
-        question:`Quel terme correspond à cette définition : « ${d.parsed.definition} » ?`,
-        options:opts,
-        answer:correct,
-        hint:"Repère le mot ou l’expression défini(e) dans le cours.",
-        explanation:`Il s’agit de « ${correct} ».`,
-        source:d.content
-      });
-    }
-  });
-
-  // 3. règles / méthodes : choix entre vraies règles du cours
-  methods.forEach((m,i)=>{
-    const correct=m.content;
-    const pool=methods.map(x=>x.content).filter(x=>x.length<190);
-    const opts=shuffle([correct,...sampleWrong(correct,pool,3)]);
-    if(opts.length>=2){
-      let question="Quelle affirmation est correcte d’après le cours ?";
-      if(/réduire une expression/i.test(correct)) question="Comment réduit-on une expression littérale ?";
-      else if(/parenthèses.*signe \+/i.test(correct)) question="Que fait-on lorsque des parenthèses sont précédées d’un signe + ?";
-      else if(/parenthèses.*signe -/i.test(correct)) question="Que fait-on lorsque des parenthèses sont précédées d’un signe − ?";
-      else if(/produit algébrique/i.test(correct)) question="Comment calcule-t-on un produit algébrique de monômes ?";
-      else if(/distributivité/i.test(correct)) question="Quelle proposition sur la distributivité est correcte ?";
-
-      questions.push({
-        id:`method-${i}`,
-        question,
-        options:opts,
-        answer:correct,
-        hint:"Relis la règle ou la méthode correspondante dans le cours.",
-        explanation:correct,
-        source:correct
-      });
-    }
-  });
-
-  // 4. vrai/faux propres, à partir des définitions exactes
-  defs.forEach((d,i)=>{
-    questions.push({
-      id:`true-${i}`,
-      question:`Vrai ou faux : « ${d.content} »`,
-      options:["Vrai","Faux"],
-      answer:"Vrai",
-      hint:`Relis la définition de « ${d.parsed.term} ».`,
-      explanation:`Cette phrase reprend la définition du cours.`,
-      source:d.content
-    });
-
-    if(defs.length>1){
-      const other=defs[(i+1)%defs.length];
-      const falseSentence=`${d.parsed.term} ${d.parsed.verb} ${other.parsed.definition}.`;
-      questions.push({
-        id:`false-${i}`,
-        question:`Vrai ou faux : « ${falseSentence} »`,
-        options:["Vrai","Faux"],
-        answer:"Faux",
-        hint:`Compare avec la vraie définition de « ${d.parsed.term} ».`,
-        explanation:`La bonne définition est : ${d.content}.`,
-        source:d.content
-      });
-    }
-  });
-
-  // filtrage et déduplication
-  const seen=new Set();
-  const clean=questions.filter(q=>{
-    if(!isCleanFrench(q.question.replace(/[«»]/g,"")))return false;
-    if(q.options.some(o=>typeof o!=="string"||o.length>230))return false;
-    const key=q.question.toLowerCase();
-    if(seen.has(key))return false;
-    seen.add(key);
-    return true;
-  });
-
-  if(clean.length<5){
-    throw new Error("Le PDF est trop mal extrait pour créer automatiquement un quiz propre. Essaie l’export PDF depuis Notability avec texte sélectionnable, ou une photo nette.");
-  }
-
-  const selected=[];
-  let cursor=0;
-  while(selected.length<count){
-    const base=clean[cursor%clean.length];
-    selected.push({...base,id:`${base.id}-${selected.length}`});
-    cursor++;
-    if(cursor>200)break;
-  }
-
-  return shuffle(selected).slice(0,count);
-}
-
-async function extractPdfText(file,onProgress){
-  if(!window.pdfjsLib){
-    throw new Error("Le lecteur PDF n’a pas pu être chargé. Recharge la page puis réessaie.");
-  }
-
-  pdfjsLib.GlobalWorkerOptions.workerSrc=
-    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-
-  const buffer=await file.arrayBuffer();
-  const pdf=await pdfjsLib.getDocument({data:buffer}).promise;
-  const extracted=[];
-
-  for(let p=1;p<=pdf.numPages;p++){
-    onProgress(`Lecture du PDF : page ${p}/${pdf.numPages}`);
-    const page=await pdf.getPage(p);
-    const content=await page.getTextContent();
-
-    const line=content.items
-      .map(item=>item.str||"")
-      .join(" ")
-      .replace(/\s+/g," ")
-      .trim();
-
-    if(line.length>8) extracted.push(line);
-  }
-
-  let text=normalizeText(extracted.join("\n"));
-
-  if(text.length<120){
-    if(!window.Tesseract){
-      throw new Error("Le PDF ne contient pas de texte sélectionnable et le module OCR n’est pas disponible.");
-    }
-
-    const ocrPages=[];
-    const maxPages=Math.min(pdf.numPages,8);
-
-    for(let p=1;p<=maxPages;p++){
-      onProgress(`OCR du PDF : page ${p}/${maxPages}`);
-      const page=await pdf.getPage(p);
-      const viewport=page.getViewport({scale:1.6});
-
-      const canvas=document.createElement("canvas");
-      const ctx=canvas.getContext("2d",{willReadFrequently:true});
-      canvas.width=Math.ceil(viewport.width);
-      canvas.height=Math.ceil(viewport.height);
-
-      await page.render({canvasContext:ctx,viewport}).promise;
-
-      const result=await Tesseract.recognize(canvas,"fra",{
-        logger:m=>{
-          if(m.status==="recognizing text"){
-            const pct=Math.round((m.progress||0)*100);
-            onProgress(`OCR du PDF : page ${p}/${maxPages} · ${pct}%`);
-          }
-        }
-      });
-
-      const pageText=normalizeText(result?.data?.text||"");
-      if(pageText.length>10) ocrPages.push(pageText);
-    }
-
-    text=normalizeText(ocrPages.join("\n"));
-  }
-
-  if(text.length<80){
-    throw new Error("Je n’arrive pas à lire suffisamment de texte dans ce PDF. Dans Notability, exporte la note en PDF puis choisis « Enregistrer dans Fichiers », ou exporte une page en image.");
-  }
-
-  return text;
-}
-
-async function ocrImage(file,onProgress){
-  if(!window.Tesseract)throw new Error("Le module de lecture d’image ne s’est pas chargé.");
-  const result=await Tesseract.recognize(file,"fra",{
-    logger:m=>{
-      if(m.status==="recognizing text"){
-        onProgress(`Lecture de l’image : ${Math.round((m.progress||0)*100)} %`);
-      }
-    }
-  });
-  return normalizeText(result.data.text||"");
-}
-
-async function publishQuiz(payload){
-  const res=await fetch(STORAGE_API,{
-    method:"POST",
-    headers:{"Content-Type":"application/json","Accept":"application/json"},
-    body:JSON.stringify(payload)
-  });
-  if(!res.ok)throw new Error("Impossible de publier le quiz en ligne.");
-  const data=await res.json();
-  if(!data.id)throw new Error("Le service de publication n’a pas renvoyé d’identifiant.");
-  return data.id;
-}
-
-async function loadPublishedQuiz(id){
-  const res=await fetch(`${STORAGE_API}/${encodeURIComponent(id)}`,{
-    headers:{"Accept":"application/json"}
-  });
-  if(!res.ok)throw new Error("Quiz introuvable ou indisponible.");
-  return await res.json();
-}
-
-function makeStudentUrl(id){
-  const u=new URL(location.href);
-  u.search="";
-  u.hash="";
-  u.searchParams.set("quiz",id);
-  return u.toString();
-}
-
-function saveLibrary(entry){
-  try{
-    const current=JSON.parse(localStorage.getItem("quizz-maths-library-v2")||"[]");
-    const next=[entry,...current.filter(x=>x.id!==entry.id)].slice(0,40);
-    localStorage.setItem("quizz-maths-library-v2",JSON.stringify(next));
-    return next;
-  }catch{
-    return [entry];
-  }
-}
-
-function getLibrary(){
-  try{return JSON.parse(localStorage.getItem("quizz-maths-library-v2")||"[]")}
-  catch{return[]}
-}
-
 function Toast({value,onClose}){
   useEffect(()=>{
     if(!value)return;
-    const id=setTimeout(onClose,4000);
+    const id=setTimeout(onClose,4500);
     return()=>clearTimeout(id);
   },[value]);
   if(!value)return null;
@@ -466,40 +84,465 @@ function Toast({value,onClose}){
   </div>
 }
 
-function App(){
-  const studentQuizId=new URLSearchParams(location.search).get("quiz");
+function normalizeText(t){
+  return String(t||"")
+    .replace(/\r/g,"\n")
+    .replace(/DéOinition/gi,"Définition")
+    .replace(/DeOinition/gi,"Définition")
+    .replace(/Définition/gi,"Définition")
+    .replace(/Propriété/gi,"Propriété")
+    .replace(/Méthode/gi,"Méthode")
+    .replace(/Règle/gi,"Règle")
+    .replace(/coefOicient/gi,"coefficient")
+    .replace(/coefOicients/gi,"coefficients")
+    .replace(/sufOit/gi,"suffit")
+    .replace(/signiWie/gi,"signifie")
+    .replace(/binôme/gi,"binôme")
+    .replace(/monôme/gi,"monôme")
+    .replace(/[ \t]+/g," ")
+    .replace(/\n{3,}/g,"\n\n")
+    .trim();
+}
 
-  const [mode,setMode]=useState(studentQuizId?"student-loading":"teacher");
+function cleanLine(s){
+  return normalizeText(s)
+    .replace(/[Ø]/g," ")
+    .replace(/\.{5,}/g," ")
+    .replace(/_{3,}/g," ")
+    .replace(/\s+/g," ")
+    .trim();
+}
+
+function usefulFrench(s){
+  if(!s||s.length<18||s.length>260)return false;
+  const letters=(s.match(/[A-Za-zÀ-ÿ]/g)||[]).length;
+  if(letters<14)return false;
+  const junk=(s.match(/[█■□�]{1,}/g)||[]).length;
+  if(junk>0)return false;
+  return true;
+}
+
+function textQuality(s){
+  if(!s)return 0;
+  const letters=(s.match(/[A-Za-zÀ-ÿ]/g)||[]).length;
+  const junk=(s.match(/[�█■□]|\.{6,}/g)||[]).length;
+  const words=s.split(/\s+/).filter(w=>/[A-Za-zÀ-ÿ]{3,}/.test(w)).length;
+  return letters + words*4 - junk*25;
+}
+
+/* =========================================================
+   IMPORT PDF ROBUSTE
+========================================================= */
+
+async function extractPageText(page){
+  const tc=await page.getTextContent();
+  const items=tc.items
+    .filter(x=>x.str&&x.str.trim())
+    .map(x=>({
+      str:x.str,
+      x:x.transform?.[4]||0,
+      y:x.transform?.[5]||0
+    }))
+    .sort((a,b)=>{
+      if(Math.abs(b.y-a.y)>2)return b.y-a.y;
+      return a.x-b.x;
+    });
+
+  const lines=[];
+  let current=[];
+  let lastY=null;
+
+  for(const item of items){
+    if(lastY===null||Math.abs(item.y-lastY)<=2.5){
+      current.push(item);
+    }else{
+      if(current.length){
+        lines.push(current.sort((a,b)=>a.x-b.x).map(x=>x.str).join(" "));
+      }
+      current=[item];
+    }
+    lastY=item.y;
+  }
+  if(current.length){
+    lines.push(current.sort((a,b)=>a.x-b.x).map(x=>x.str).join(" "));
+  }
+
+  return normalizeText(lines.join("\n"));
+}
+
+async function ocrPdfPage(page,pageNo,total,onProgress){
+  if(!window.Tesseract) return "";
+
+  const viewport=page.getViewport({scale:1.55});
+  const canvas=document.createElement("canvas");
+  const ctx=canvas.getContext("2d",{willReadFrequently:true});
+  canvas.width=Math.ceil(viewport.width);
+  canvas.height=Math.ceil(viewport.height);
+
+  await page.render({canvasContext:ctx,viewport}).promise;
+
+  const result=await Tesseract.recognize(canvas,"fra",{
+    logger:m=>{
+      if(m.status==="recognizing text"){
+        onProgress(`OCR page ${pageNo}/${total} · ${Math.round((m.progress||0)*100)} %`);
+      }
+    }
+  });
+
+  return normalizeText(result?.data?.text||"");
+}
+
+async function extractPdfText(file,onProgress){
+  if(!window.pdfjsLib){
+    throw new Error("Le lecteur PDF n’a pas pu être chargé. Recharge la page puis réessaie.");
+  }
+
+  pdfjsLib.GlobalWorkerOptions.workerSrc=
+    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+  let pdf;
+  try{
+    pdf=await pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;
+  }catch(e){
+    throw new Error("Ce PDF n’a pas pu être ouvert. Réexporte-le depuis Notability au format PDF standard.");
+  }
+
+  const pages=[];
+
+  for(let p=1;p<=pdf.numPages;p++){
+    onProgress(`Lecture du PDF : page ${p}/${pdf.numPages}`);
+    const page=await pdf.getPage(p);
+
+    let extracted=await extractPageText(page);
+
+    // OCR seulement si le texte de la page est trop pauvre ou manifestement cassé.
+    if(extracted.length<80||textQuality(extracted)<180){
+      const ocr=await ocrPdfPage(page,p,pdf.numPages,onProgress);
+      if(textQuality(ocr)>textQuality(extracted)){
+        extracted=ocr;
+      }
+    }
+
+    if(extracted.trim())pages.push(extracted);
+  }
+
+  const full=normalizeText(pages.join("\n\n"));
+
+  if(full.length<120){
+    throw new Error("Le PDF a bien été ouvert, mais je n’arrive pas à récupérer assez de texte. Essaie un export PDF standard depuis Notability ou une image nette.");
+  }
+
+  return full;
+}
+
+/* =========================================================
+   EXTRACTION DES NOTIONS DU COURS
+========================================================= */
+
+function extractCourseItems(text){
+  let t=normalizeText(text);
+
+  // Marqueurs souvent collés au texte dans les PDF Notability.
+  t=t
+    .replace(/\s+(Définition\s*:)/gi,"\n$1")
+    .replace(/\s+(Définitions\s*:)/gi,"\n$1")
+    .replace(/\s+(Propriété\s*:)/gi,"\n$1")
+    .replace(/\s+(Méthode\s*:)/gi,"\n$1")
+    .replace(/\s+(Règle\s*\d*\s*:)/gi,"\n$1")
+    .replace(/\s+(Rappel\s*:)/gi,"\n$1")
+    .replace(/\s+(Remarque\s*:)/gi,"\n$1");
+
+  const rawLines=t.split("\n").map(cleanLine).filter(Boolean);
+  const items=[];
+
+  function add(type,content){
+    content=cleanLine(content)
+      .replace(/\s+(?:Exercice|Application|Dans Amplitude|Exemples?\s*:).*$/i,"")
+      .trim();
+
+    if(!usefulFrench(content))return;
+
+    const key=(type+"|"+content.toLowerCase()).slice(0,240);
+    if(!items.some(x=>x.key===key)){
+      items.push({key,type,content});
+    }
+  }
+
+  for(let i=0;i<rawLines.length;i++){
+    const line=rawLines[i];
+
+    let m=line.match(/^(Définition|Définitions)\s*:\s*(.+)$/i);
+    if(m){ add("definition",m[2]); continue; }
+
+    m=line.match(/^Propriété\s*:\s*(.+)$/i);
+    if(m){ add("property",m[1]); continue; }
+
+    m=line.match(/^Méthode\s*:\s*(.+)$/i);
+    if(m){ add("method",m[1]); continue; }
+
+    m=line.match(/^Règle\s*\d*\s*:\s*(.+)$/i);
+    if(m){ add("rule",m[1]); continue; }
+
+    m=line.match(/^Rappel\s*:\s*(.+)$/i);
+    if(m){ add("reminder",m[1]); continue; }
+
+    // Cas réels du PDF fourni : phrases utiles sans marqueur.
+    if(/^(Un monôme est|Une expression littérale s'écrit|La valeur numérique d'une expression littérale est|Des binômes conjugués sont|La distributivité simple permet|Le carré d'une somme|Le carré d'une différence|Le produit de deux binômes conjugués)/i.test(line)){
+      add(/ est | sont /i.test(line)?"definition":"property",line);
+      continue;
+    }
+
+    if(/^(Pour réduire|Pour additionner|Pour soustraire|Pour calculer un produit algébrique|Pour supprimer des parenthèses)/i.test(line)){
+      add("method",line);
+      continue;
+    }
+
+    // Phrases de définition/méthode sémantiquement propres.
+    if(/est une expression|est le nombre obtenu|est égal à|signifie transformer|on additionne les termes semblables|on recopie les termes|on applique la distributivité/i.test(line)){
+      add(/est une|est le nombre|signifie/i.test(line)?"definition":"property",line);
+    }
+  }
+
+  return items.map(({key,...rest})=>rest);
+}
+
+function parseDefinition(s){
+  const patterns=[
+    /^(.{2,90}?)\s+(est une|est un|est le|sont des|signifie|désigne)\s+(.+)$/i,
+    /^Dans .+?,\s*(.{2,80}?)\s+(sont)\s+(.+)$/i
+  ];
+  for(const p of patterns){
+    const m=s.match(p);
+    if(m)return {term:m[1].trim(),verb:m[2].trim(),definition:m[3].trim()};
+  }
+  return null;
+}
+
+function shuffle(a){
+  const x=[...a];
+  for(let i=x.length-1;i>0;i--){
+    const j=Math.floor(Math.random()*(i+1));
+    [x[i],x[j]]=[x[j],x[i]];
+  }
+  return x;
+}
+
+function buildQuiz(text,count){
+  const items=extractCourseItems(text);
+
+  const definitions=items
+    .map(x=>({...x,parsed:parseDefinition(x.content)}))
+    .filter(x=>x.parsed&&usefulFrench(x.parsed.definition));
+
+  const rules=items
+    .filter(x=>["method","rule","property","reminder"].includes(x.type))
+    .filter(x=>usefulFrench(x.content));
+
+  if(definitions.length+rules.length<4){
+    throw new Error("Le PDF est bien importé, mais je ne trouve pas encore assez de notions propres pour fabriquer un QCM fiable.");
+  }
+
+  const questions=[];
+
+  // Définitions : terme -> définition
+  definitions.forEach((d,i)=>{
+    const alternatives=shuffle(
+      definitions
+        .filter((_,j)=>j!==i)
+        .map(x=>x.parsed.definition)
+        .filter(x=>x.length<170)
+    ).slice(0,3);
+
+    if(alternatives.length<2)return;
+
+    questions.push({
+      id:`d1-${i}`,
+      question:`Quelle définition correspond à « ${d.parsed.term} » ?`,
+      options:shuffle([d.parsed.definition,...alternatives]),
+      answer:d.parsed.definition,
+      hint:`Cherche dans le cours la définition de « ${d.parsed.term} ».`,
+      explanation:`${d.parsed.term} ${d.parsed.verb} ${d.parsed.definition}.`,
+      source:d.content
+    });
+  });
+
+  // Définitions : définition -> terme
+  definitions.forEach((d,i)=>{
+    const alternatives=shuffle(
+      definitions.filter((_,j)=>j!==i).map(x=>x.parsed.term)
+    ).slice(0,3);
+
+    if(alternatives.length<2)return;
+
+    questions.push({
+      id:`d2-${i}`,
+      question:`Quel terme correspond à cette définition : « ${d.parsed.definition} » ?`,
+      options:shuffle([d.parsed.term,...alternatives]),
+      answer:d.parsed.term,
+      hint:"Relis les définitions du cours.",
+      explanation:`La bonne réponse est « ${d.parsed.term} ».`,
+      source:d.content
+    });
+  });
+
+  // Méthodes / règles.
+  rules.forEach((r,i)=>{
+    const alternatives=shuffle(
+      rules.filter((_,j)=>j!==i).map(x=>x.content).filter(x=>x.length<180)
+    ).slice(0,3);
+
+    if(alternatives.length<2)return;
+
+    let question="Quelle affirmation est correcte d’après le cours ?";
+    const s=r.content;
+
+    if(/réduire une expression/i.test(s)){
+      question="Comment réduit-on une expression littérale ?";
+    }else if(/produit algébrique.*monômes/i.test(s)){
+      question="Comment calcule-t-on un produit algébrique de monômes ?";
+    }else if(/parenthèses.*signe \+/i.test(s)){
+      question="Que fait-on pour supprimer des parenthèses précédées d’un signe + ?";
+    }else if(/parenthèses.*signe -/i.test(s)){
+      question="Que fait-on pour supprimer des parenthèses précédées d’un signe − ?";
+    }else if(/binômes conjugués/i.test(s)){
+      question="Quelle propriété sur les binômes conjugués est correcte ?";
+    }else if(/carré d'une somme/i.test(s)){
+      question="Quelle propriété décrit le carré d’une somme ?";
+    }else if(/carré d'une différence/i.test(s)){
+      question="Quelle propriété décrit le carré d’une différence ?";
+    }
+
+    questions.push({
+      id:`r-${i}`,
+      question,
+      options:shuffle([s,...alternatives]),
+      answer:s,
+      hint:"Relis la règle ou la propriété correspondante dans le cours.",
+      explanation:s,
+      source:s
+    });
+  });
+
+  // Vrai / faux uniquement sur des énoncés propres.
+  definitions.slice(0,6).forEach((d,i)=>{
+    questions.push({
+      id:`tf-${i}`,
+      question:`Vrai ou faux : « ${d.content} »`,
+      options:["Vrai","Faux"],
+      answer:"Vrai",
+      hint:`Relis la définition de « ${d.parsed.term} ».`,
+      explanation:"Cette phrase correspond bien au cours.",
+      source:d.content
+    });
+  });
+
+  const seen=new Set();
+  const clean=questions.filter(q=>{
+    const k=q.question.toLowerCase();
+    if(seen.has(k))return false;
+    seen.add(k);
+    if(q.options.some(o=>!usefulFrench(o)&&!["Vrai","Faux"].includes(o)))return false;
+    return true;
+  });
+
+  if(clean.length<5){
+    throw new Error("Le cours est importé, mais les notions extraites ne sont pas assez propres pour générer un QCM correct.");
+  }
+
+  const out=[];
+  let i=0;
+  while(out.length<count){
+    const base=clean[i%clean.length];
+    out.push({...base,id:`${base.id}-${out.length}`});
+    i++;
+    if(i>200)break;
+  }
+
+  return shuffle(out).slice(0,count);
+}
+
+/* =========================================================
+   PUBLICATION / QR
+========================================================= */
+
+async function publishQuiz(payload){
+  const res=await fetch(STORAGE_API,{
+    method:"POST",
+    headers:{"Content-Type":"application/json","Accept":"application/json"},
+    body:JSON.stringify(payload)
+  });
+  if(!res.ok)throw new Error("Le quiz a été créé, mais sa publication en ligne a échoué.");
+  const data=await res.json();
+  if(!data.id)throw new Error("Le service de publication n’a pas renvoyé d’identifiant.");
+  return data.id;
+}
+
+async function loadQuiz(id){
+  const res=await fetch(`${STORAGE_API}/${encodeURIComponent(id)}`,{
+    headers:{"Accept":"application/json"}
+  });
+  if(!res.ok)throw new Error("Quiz introuvable.");
+  return await res.json();
+}
+
+function studentUrl(id){
+  const u=new URL(location.href);
+  u.search="";
+  u.hash="";
+  u.searchParams.set("quiz",id);
+  return u.toString();
+}
+
+function saveLibrary(entry){
+  try{
+    const list=JSON.parse(localStorage.getItem("qm-library-v3")||"[]");
+    const next=[entry,...list.filter(x=>x.id!==entry.id)].slice(0,30);
+    localStorage.setItem("qm-library-v3",JSON.stringify(next));
+    return next;
+  }catch{return[entry]}
+}
+
+function readLibrary(){
+  try{return JSON.parse(localStorage.getItem("qm-library-v3")||"[]")}
+  catch{return[]}
+}
+
+/* =========================================================
+   APPLICATION
+========================================================= */
+
+function App(){
+  const studentId=new URLSearchParams(location.search).get("quiz");
+
+  const [mode,setMode]=useState(studentId?"student-loading":"teacher");
   const [title,setTitle]=useState("Quizz Maths");
   const [count,setCount]=useState(15);
-  const [course,setCourse]=useState(SAMPLE);
+  const [course,setCourse]=useState("");
   const [filename,setFilename]=useState("");
   const [busy,setBusy]=useState("");
   const [toast,setToast]=useState(null);
   const [quiz,setQuiz]=useState([]);
-  const [publishedId,setPublishedId]=useState("");
   const [publishedUrl,setPublishedUrl]=useState("");
-  const [library,setLibrary]=useState(getLibrary());
+  const [library,setLibrary]=useState(readLibrary());
 
   const [index,setIndex]=useState(0);
   const [selected,setSelected]=useState("");
   const [feedback,setFeedback]=useState(null);
   const [showHint,setShowHint]=useState(false);
   const [answers,setAnswers]=useState({});
-  const qrRef=useRef(null);
 
+  const qrRef=useRef(null);
   const current=quiz[index];
-  const correctCount=Object.values(answers).filter(a=>a.correct).length;
+  const correct=Object.values(answers).filter(x=>x.correct).length;
 
   useEffect(()=>{
-    if(!studentQuizId)return;
+    if(!studentId)return;
     (async()=>{
       try{
-        const data=await loadPublishedQuiz(studentQuizId);
-        if(!Array.isArray(data.questions))throw new Error("Format de quiz invalide.");
+        const data=await loadQuiz(studentId);
+        if(!Array.isArray(data.questions))throw new Error("Quiz invalide.");
         setTitle(data.title||"Quizz Maths");
         setQuiz(data.questions);
-        setPublishedId(studentQuizId);
         setMode("student-intro");
       }catch(e){
         setMode("student-error");
@@ -519,128 +562,130 @@ function App(){
     });
   },[mode,publishedUrl]);
 
-  async function handleFile(e){
-    const file=e.target.files?.[0];
-    if(!file)return;
-    setFilename(file.name);
+  async function importFile(e){
+    const f=e.target.files?.[0];
+    if(!f)return;
+    setFilename(f.name);
+
     try{
-      if(file.type==="application/pdf"||file.name.toLowerCase().endsWith(".pdf")){
-        setBusy("Lecture du PDF…");
-        const text=await extractPdfText(file,setBusy);
+      if(f.type==="application/pdf"||f.name.toLowerCase().endsWith(".pdf")){
+        setBusy("Ouverture du PDF…");
+        const text=await extractPdfText(f,setBusy);
         setCourse(text);
         setBusy("");
-        setToast({type:"success",text:"PDF importé. Choisis le nombre de questions puis crée le quiz."});
+        setToast({type:"success",text:`PDF importé : ${text.length.toLocaleString("fr-FR")} caractères récupérés.`});
         return;
       }
 
-      if(file.type.startsWith("image/")){
+      if(f.type.startsWith("image/")){
         setBusy("Lecture de l’image…");
-        const text=await ocrImage(file,setBusy);
+        const result=await Tesseract.recognize(f,"fra",{
+          logger:m=>{
+            if(m.status==="recognizing text"){
+              setBusy(`Lecture de l’image : ${Math.round((m.progress||0)*100)} %`);
+            }
+          }
+        });
+        const text=normalizeText(result.data.text||"");
+        if(text.length<80)throw new Error("Je n’arrive pas à lire assez de texte sur cette image.");
         setCourse(text);
         setBusy("");
-        setToast({type:"success",text:"Image lue. Tu peux créer le quiz."});
+        setToast({type:"success",text:"Image importée."});
         return;
       }
 
-      if(file.type.startsWith("text/")||/\.(txt|md|csv)$/i.test(file.name)){
-        setCourse(normalizeText(await file.text()));
+      if(f.type.startsWith("text/")||/\.(txt|md|csv)$/i.test(f.name)){
+        setCourse(normalizeText(await f.text()));
         setToast({type:"success",text:"Fichier importé."});
         return;
       }
 
-      throw new Error("Utilise un PDF, une image ou un fichier texte.");
-    }catch(e){
+      throw new Error("Format non pris en charge.");
+    }catch(err){
       setBusy("");
-      setToast({type:"error",text:e.message});
+      setCourse("");
+      setToast({type:"error",text:err.message||"Import impossible."});
     }
   }
 
-  async function createAndPublish(){
+  async function createQuiz(){
     try{
-      setBusy("Création des questions…");
+      if(!course.trim())throw new Error("Importe d’abord ton cours.");
+
+      setBusy("Création du QCM…");
       const questions=buildQuiz(course,count);
 
       setBusy("Publication du quiz…");
-      const payload={
+      const id=await publishQuiz({
         app:"quizz-maths",
-        version:2,
+        version:3,
         title,
         createdAt:new Date().toISOString(),
         questions
-      };
+      });
 
-      const id=await publishQuiz(payload);
-      const url=makeStudentUrl(id);
-
+      const url=studentUrl(id);
       setQuiz(questions);
-      setPublishedId(id);
       setPublishedUrl(url);
 
-      const entry={
+      setLibrary(saveLibrary({
         id,
         title,
+        url,
         count:questions.length,
-        createdAt:new Date().toISOString(),
-        url
-      };
-      setLibrary(saveLibrary(entry));
+        createdAt:new Date().toISOString()
+      }));
 
       setBusy("");
       setMode("published");
-      setToast({type:"success",text:"Quiz créé et publié. Le QR élève est prêt."});
+      setToast({type:"success",text:"Quiz créé. Le QR élève est prêt."});
     }catch(e){
       setBusy("");
       setToast({type:"error",text:e.message});
     }
   }
 
-  function startStudentQuiz(){
+  function startQuiz(){
     setIndex(0);
     setSelected("");
     setFeedback(null);
     setShowHint(false);
     setAnswers({});
     setMode("student-quiz");
-    window.scrollTo(0,0);
   }
 
-  function validateAnswer(){
-    if(!selected||!current||feedback)return;
+  function validate(){
+    if(!selected||feedback||!current)return;
     const ok=selected===current.answer;
-    setAnswers(a=>({...a,[current.id]:{selected,correct:ok}}));
+    setAnswers(a=>({...a,[current.id]:{correct:ok,selected}}));
     setFeedback({
       correct:ok,
-      message:ok
-        ? ENCOURAGEMENT_OK[(index+correctCount)%ENCOURAGEMENT_OK.length]
-        : ENCOURAGEMENT_BAD[(index+correctCount)%ENCOURAGEMENT_BAD.length]
+      text:ok
+        ? GOOD[(index+correct)%GOOD.length]
+        : BAD[(index+correct)%BAD.length]
     });
   }
 
-  function nextQuestion(){
+  function next(){
     if(index+1>=quiz.length){
       setMode("student-results");
       window.scrollTo(0,0);
       return;
     }
-    setIndex(i=>i+1);
+    setIndex(v=>v+1);
     setSelected("");
     setFeedback(null);
     setShowHint(false);
     window.scrollTo({top:0,behavior:"smooth"});
   }
 
-  function openTeacherTest(){
-    startStudentQuiz();
-  }
-
-  async function reopenPublished(item){
+  async function reopen(item){
     try{
-      setBusy("Chargement du quiz…");
-      const data=await loadPublishedQuiz(item.id);
+      setBusy("Chargement…");
+      const data=await loadQuiz(item.id);
       setQuiz(data.questions||[]);
       setTitle(data.title||item.title);
-      setPublishedId(item.id);
-      setPublishedUrl(item.url||makeStudentUrl(item.id));
+      setPublishedUrl(item.url);
       setBusy("");
       setMode("published");
     }catch(e){
@@ -649,62 +694,53 @@ function App(){
     }
   }
 
-  function deleteFromLibrary(id){
-    const next=library.filter(x=>x.id!==id);
-    localStorage.setItem("quizz-maths-library-v2",JSON.stringify(next));
-    setLibrary(next);
-  }
+  /* ---------------- étudiant ---------------- */
 
-  /* -------------------- STUDENT LOADING -------------------- */
   if(mode==="student-loading"){
     return <main className="min-h-screen grid place-items-center px-4">
       <div className="text-center">
-        <div className="w-16 h-16 rounded-2xl bg-indigo-100 text-indigo-700 mx-auto grid place-items-center"><Icon name="loader-circle" size={32}/></div>
+        <div className="w-16 h-16 mx-auto rounded-2xl bg-indigo-100 text-indigo-700 grid place-items-center"><Icon name="loader-circle" size={34}/></div>
         <h1 className="mt-4 text-2xl font-black">Chargement du quiz…</h1>
-        <p className="mt-2 text-slate-600">Quelques secondes.</p>
       </div>
     </main>
   }
 
   if(mode==="student-error"){
     return <main className="min-h-screen grid place-items-center px-4">
-      <section className="max-w-md w-full bg-white border border-rose-200 rounded-3xl p-6 text-center shadow-soft">
-        <Icon name="circle-alert" size={42}/>
-        <h1 className="text-2xl font-black mt-3">Quiz indisponible</h1>
-        <p className="text-slate-600 mt-2">Le lien ou le QR code n’est plus accessible.</p>
+      <section className="max-w-md bg-white border border-rose-200 rounded-3xl p-6 text-center shadow-soft">
+        <h1 className="text-2xl font-black">Quiz indisponible</h1>
+        <p className="mt-2 text-slate-600">Le QR ou le lien n’est plus accessible.</p>
       </section>
       <Toast value={toast} onClose={()=>setToast(null)}/>
     </main>
   }
 
-  /* -------------------- STUDENT INTRO -------------------- */
   if(mode==="student-intro"){
     return <main className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-fuchsia-50 px-4 py-8 grid place-items-center">
-      <section className="max-w-xl w-full bg-white border border-slate-200 rounded-[2rem] p-7 sm:p-9 text-center shadow-soft">
+      <section className="max-w-xl w-full bg-white border border-slate-200 rounded-[2rem] p-8 text-center shadow-soft">
         <div className="w-20 h-20 mx-auto rounded-3xl bg-indigo-100 text-indigo-700 grid place-items-center"><Icon name="brain-circuit" size={42}/></div>
         <p className="mt-5 uppercase tracking-[.18em] text-xs font-black text-indigo-700">Mathématiques</p>
-        <h1 className="text-3xl sm:text-4xl font-black mt-2">{title}</h1>
-        <p className="mt-3 text-slate-600">{quiz.length} questions · une question à la fois · indice disponible</p>
-        <button onClick={startStudentQuiz} className="tap mt-7 w-full rounded-2xl bg-indigo-700 text-white font-black text-lg px-5 flex items-center justify-center gap-2">
+        <h1 className="text-3xl font-black mt-2">{title}</h1>
+        <p className="mt-3 text-slate-600">{quiz.length} questions · indice disponible · bilan final</p>
+        <button onClick={startQuiz} className="tap mt-7 w-full rounded-2xl bg-indigo-700 text-white font-black text-lg flex justify-center items-center gap-2">
           <Icon name="play"/> Commencer
         </button>
       </section>
     </main>
   }
 
-  /* -------------------- STUDENT QUIZ -------------------- */
   if(mode==="student-quiz"&&current){
     const progress=Math.round(((index+1)/quiz.length)*100);
 
     return <main className="min-h-screen bg-slate-50">
-      <header className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-slate-200">
+      <header className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b">
         <div className="max-w-2xl mx-auto px-4 py-3">
-          <div className="flex justify-between gap-3 text-sm font-black">
+          <div className="flex justify-between text-sm font-black">
             <span>Question {index+1}/{quiz.length}</span>
-            <span>{correctCount} juste{correctCount>1?"s":""}</span>
+            <span>{correct} juste{correct>1?"s":""}</span>
           </div>
-          <div className="mt-2 h-2 bg-slate-200 rounded-full overflow-hidden" role="progressbar" aria-valuenow={progress} aria-valuemin="0" aria-valuemax="100">
-            <div className="h-full bg-indigo-600" style={{width:`${progress}%`}}></div>
+          <div className="mt-2 h-2 rounded-full bg-slate-200 overflow-hidden">
+            <div className="h-full bg-indigo-600" style={{width:`${progress}%`}}/>
           </div>
         </div>
       </header>
@@ -716,16 +752,16 @@ function App(){
           {!feedback&&<>
             <fieldset className="mt-6 space-y-3">
               <legend className="sr-only">Choisis une réponse</legend>
-              {current.options.map((option,i)=>{
-                const active=selected===option;
+              {current.options.map((opt,i)=>{
+                const active=selected===opt;
                 return <label key={i} className={`tap rounded-2xl border-2 p-4 flex gap-3 items-start cursor-pointer font-bold ${active?"border-indigo-600 bg-indigo-50":"border-slate-200 bg-white"}`}>
-                  <input type="radio" name="answer" checked={active} onChange={()=>setSelected(option)} className="mt-1 w-5 h-5 accent-indigo-700"/>
-                  <span>{option}</span>
+                  <input type="radio" name="answer" checked={active} onChange={()=>setSelected(opt)} className="mt-1 w-5 h-5 accent-indigo-700"/>
+                  <span>{opt}</span>
                 </label>
               })}
             </fieldset>
 
-            <button onClick={()=>setShowHint(v=>!v)} className="tap mt-5 w-full rounded-2xl border-2 border-amber-200 bg-amber-50 text-amber-950 font-black px-4 flex items-center justify-center gap-2">
+            <button onClick={()=>setShowHint(v=>!v)} className="tap mt-5 w-full rounded-2xl border-2 border-amber-200 bg-amber-50 text-amber-950 font-black flex items-center justify-center gap-2">
               <Icon name="lightbulb"/> {showHint?"Masquer l’indice":"Indice du cours"}
             </button>
 
@@ -733,26 +769,22 @@ function App(){
               <strong>Indice :</strong> {current.hint}
             </div>}
 
-            <button onClick={validateAnswer} disabled={!selected} className="tap mt-3 w-full rounded-2xl bg-indigo-700 disabled:bg-slate-300 text-white font-black px-5">
+            <button onClick={validate} disabled={!selected} className="tap mt-3 w-full rounded-2xl bg-indigo-700 disabled:bg-slate-300 text-white font-black">
               Valider ma réponse
             </button>
           </>}
 
-          {feedback&&<div className={`mt-6 rounded-3xl border p-5 ${feedback.correct?"bg-emerald-50 border-emerald-200 text-emerald-950":"bg-rose-50 border-rose-200 text-rose-950"}`} role="status">
-            <div className="font-black text-lg flex gap-2 items-center">
-              <Icon name={feedback.correct?"circle-check":"circle-x"}/>
-              {feedback.message}
-            </div>
-
+          {feedback&&<div className={`mt-6 rounded-3xl border p-5 ${feedback.correct?"bg-emerald-50 border-emerald-200 text-emerald-950":"bg-rose-50 border-rose-200 text-rose-950"}`}>
+            <div className="text-lg font-black">{feedback.text}</div>
             {!feedback.correct&&<p className="mt-3"><strong>Bonne réponse :</strong> {current.answer}</p>}
             <p className="mt-3"><strong>À retenir :</strong> {current.explanation}</p>
 
             <details className="mt-4 rounded-2xl bg-white/70 border border-current/10 p-4">
               <summary className="cursor-pointer font-black">📘 Voir l’extrait du cours</summary>
-              <p className="mt-2 text-sm leading-relaxed">{current.source}</p>
+              <p className="mt-2 text-sm">{current.source}</p>
             </details>
 
-            <button onClick={nextQuestion} className="tap mt-5 w-full rounded-2xl bg-slate-900 text-white font-black px-5 flex items-center justify-center gap-2">
+            <button onClick={next} className="tap mt-5 w-full rounded-2xl bg-slate-900 text-white font-black flex items-center justify-center gap-2">
               {index+1===quiz.length?"Voir mon bilan":"Question suivante"} <Icon name="arrow-right"/>
             </button>
           </div>}
@@ -761,86 +793,76 @@ function App(){
     </main>
   }
 
-  /* -------------------- STUDENT RESULTS -------------------- */
   if(mode==="student-results"){
-    const percent=quiz.length?Math.round((correctCount/quiz.length)*100):0;
+    const percent=quiz.length?Math.round(correct/quiz.length*100):0;
     const missed=quiz.filter(q=>!answers[q.id]?.correct);
 
     return <main className="min-h-screen bg-gradient-to-br from-emerald-50 via-white to-indigo-50 px-4 py-7">
       <div className="max-w-3xl mx-auto">
         <section className="bg-white border border-slate-200 rounded-[2rem] p-7 text-center shadow-soft">
           <div className="w-20 h-20 mx-auto rounded-full bg-emerald-100 text-emerald-800 grid place-items-center"><Icon name="trophy" size={42}/></div>
-          <p className="mt-4 uppercase tracking-[.18em] text-xs font-black text-emerald-700">Bilan</p>
-          <h1 className="text-4xl font-black mt-2">{correctCount}/{quiz.length}</h1>
+          <h1 className="text-4xl font-black mt-4">{correct}/{quiz.length}</h1>
           <p className="text-xl font-bold mt-1">{percent}%</p>
           <p className="mt-3 text-slate-600">
             {percent>=80?"Très bon travail !":
-             percent>=60?"C’est bien, encore quelques points à consolider.":
-             "Relis les points indiqués ci-dessous puis retente le quiz."}
+             percent>=60?"C’est bien. Encore quelques points à consolider.":
+             "Relis les points à revoir puis retente le quiz."}
           </p>
         </section>
 
         <section className="mt-5 bg-white border border-slate-200 rounded-3xl p-5 shadow-soft">
-          <h2 className="text-xl font-black flex gap-2 items-center"><Icon name="book-open-check"/> Points à revoir</h2>
+          <h2 className="text-xl font-black">Points à revoir</h2>
           {missed.length===0
             ? <p className="mt-3 rounded-2xl bg-emerald-50 p-4 text-emerald-900 font-bold">Aucune erreur. Bravo !</p>
             : <div className="mt-4 space-y-3">
                 {missed.map((q,i)=><details key={q.id} className="rounded-2xl border border-slate-200 p-4">
-                  <summary className="cursor-pointer font-black">{i+1}. {q.question}</summary>
+                  <summary className="font-black cursor-pointer">{i+1}. {q.question}</summary>
                   <p className="mt-3 text-sm"><strong>Bonne réponse :</strong> {q.answer}</p>
-                  <p className="mt-2 text-sm"><strong>À retenir :</strong> {q.explanation}</p>
+                  <p className="mt-2 text-sm">{q.explanation}</p>
                 </details>)}
               </div>
           }
         </section>
 
-        <button onClick={startStudentQuiz} className="tap mt-5 w-full rounded-2xl bg-indigo-700 text-white font-black px-5 flex items-center justify-center gap-2">
+        <button onClick={startQuiz} className="tap mt-5 w-full rounded-2xl bg-indigo-700 text-white font-black flex justify-center items-center gap-2">
           <Icon name="rotate-ccw"/> Refaire le quiz
         </button>
       </div>
     </main>
   }
 
-  /* -------------------- TEACHER PUBLISHED -------------------- */
+  /* ---------------- prof : QR ---------------- */
+
   if(mode==="published"){
     return <main className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-emerald-50 px-4 py-6">
       <div className="max-w-3xl mx-auto">
         <button onClick={()=>setMode("teacher")} className="tap rounded-xl px-3 font-bold flex items-center gap-2"><Icon name="arrow-left"/> Nouveau quiz</button>
 
-        <section className="mt-3 bg-white border border-slate-200 rounded-[2rem] p-6 sm:p-8 text-center shadow-soft">
+        <section className="mt-3 bg-white border border-slate-200 rounded-[2rem] p-7 text-center shadow-soft">
           <div className="w-16 h-16 mx-auto rounded-2xl bg-emerald-100 text-emerald-800 grid place-items-center"><Icon name="qr-code" size={34}/></div>
           <h1 className="text-3xl font-black mt-4">{title}</h1>
-          <p className="mt-2 text-slate-600">{quiz.length} questions · QR prêt pour les élèves</p>
+          <p className="mt-2 text-slate-600">{quiz.length} questions · QR élève prêt</p>
 
-          <div ref={qrRef} className="mt-6 mx-auto w-[260px] min-h-[260px] grid place-items-center" aria-label="QR code élève"></div>
+          <div ref={qrRef} className="mt-6 mx-auto w-[260px] min-h-[260px] grid place-items-center"></div>
 
-          <p className="mt-4 text-sm text-slate-600">Affiche ce QR au vidéoprojecteur. L’élève arrive directement sur le quiz.</p>
+          <p className="mt-4 text-sm text-slate-600">L’élève scanne et arrive directement sur le quiz.</p>
 
-          <div className="mt-6 grid sm:grid-cols-2 gap-3">
-            <button onClick={openTeacherTest} className="tap rounded-2xl bg-indigo-700 text-white font-black px-4 flex items-center justify-center gap-2"><Icon name="play"/> Tester le quiz</button>
-            <button onClick={async()=>{
-              try{await navigator.clipboard.writeText(publishedUrl);setToast({type:"success",text:"Lien élève copié."})}
-              catch{setToast({type:"error",text:"Impossible de copier le lien."})}
-            }} className="tap rounded-2xl border-2 border-slate-300 bg-white font-black px-4 flex items-center justify-center gap-2"><Icon name="copy"/> Copier le lien</button>
-          </div>
+          <button onClick={startQuiz} className="tap mt-5 w-full rounded-2xl bg-indigo-700 text-white font-black flex items-center justify-center gap-2">
+            <Icon name="play"/> Tester le quiz
+          </button>
         </section>
       </div>
       <Toast value={toast} onClose={()=>setToast(null)}/>
     </main>
   }
 
-  /* -------------------- TEACHER HOME -------------------- */
+  /* ---------------- prof : accueil ---------------- */
+
   return <main className="min-h-screen">
     <header className="bg-gradient-to-br from-indigo-700 via-violet-700 to-fuchsia-700 text-white">
       <div className="max-w-4xl mx-auto px-4 py-8 sm:py-10">
-        <div className="flex gap-4 items-start">
-          <div className="w-14 h-14 rounded-2xl bg-white/15 grid place-items-center"><Icon name="sigma" size={30}/></div>
-          <div>
-            <p className="uppercase tracking-[.2em] text-xs font-black text-indigo-100">Professeur</p>
-            <h1 className="text-3xl sm:text-4xl font-black mt-1">Quizz Maths</h1>
-            <p className="mt-2 text-indigo-100">Importe ton cours. Choisis le nombre de questions. Le QR est généré automatiquement.</p>
-          </div>
-        </div>
+        <h1 className="text-3xl sm:text-4xl font-black">Quizz Maths</h1>
+        <p className="mt-2 text-indigo-100">Importe ton cours → choisis le nombre de questions → crée le quiz & le QR.</p>
       </div>
     </header>
 
@@ -848,18 +870,18 @@ function App(){
       <section className="bg-white border border-slate-200 rounded-3xl p-5 sm:p-7 shadow-soft">
         <h2 className="text-xl font-black">1. Importer le cours</h2>
 
-        <div className="mt-3 rounded-2xl bg-sky-50 border border-sky-200 p-4 text-sm text-sky-950">
-          <strong>Notability sur iPad :</strong> dans la note, fais <strong>Partager → PDF → Enregistrer dans Fichiers</strong>. Ensuite reviens ici et choisis ce PDF.
-        </div>
-
         <label className="tap mt-4 w-full rounded-2xl border-2 border-dashed border-indigo-300 bg-indigo-50 hover:bg-indigo-100 cursor-pointer px-4 py-6 flex items-center justify-center gap-3 text-indigo-900 font-black">
           <Icon name="upload"/>
-          <span>{filename||"PDF Notability depuis Fichiers, photo ou fichier texte"}</span>
-          <input className="sr-only" type="file" accept=".pdf,image/*,.txt,.md,.csv" onChange={handleFile}/>
+          <span>{filename||"Choisir un PDF Notability"}</span>
+          <input className="sr-only" type="file" accept=".pdf,application/pdf,image/*,.txt,.md,.csv" onChange={importFile}/>
         </label>
 
-        {busy&&<div className="mt-4 rounded-2xl bg-amber-50 border border-amber-200 p-4 text-amber-950 font-bold flex items-center gap-3">
-          <Icon name="loader-circle"/><span>{busy}</span>
+        {busy&&<div className="mt-4 rounded-2xl bg-amber-50 border border-amber-200 p-4 text-amber-950 font-bold">
+          {busy}
+        </div>}
+
+        {course&&<div className="mt-4 rounded-2xl bg-emerald-50 border border-emerald-200 p-4 text-emerald-950 font-bold">
+          ✓ Cours importé. Tu peux créer le QCM.
         </div>}
 
         <div className="mt-5 grid sm:grid-cols-2 gap-4">
@@ -869,32 +891,28 @@ function App(){
             </select>
           </label>
 
-          <label className="font-black">Titre du quiz
+          <label className="font-black">Titre
             <input value={title} onChange={e=>setTitle(e.target.value.slice(0,70))} className="tap mt-2 w-full rounded-xl border border-slate-300 px-3"/>
           </label>
         </div>
 
-        <button onClick={createAndPublish} disabled={!!busy||!course.trim()} className="tap mt-6 w-full rounded-2xl bg-indigo-700 disabled:bg-slate-300 text-white font-black text-lg px-5 flex items-center justify-center gap-2">
+        <button onClick={createQuiz} disabled={!course||!!busy} className="tap mt-6 w-full rounded-2xl bg-indigo-700 disabled:bg-slate-300 text-white font-black text-lg flex items-center justify-center gap-2">
           <Icon name="wand-sparkles"/> Créer le quiz & le QR
         </button>
 
         <details className="mt-5 rounded-2xl border border-slate-200 p-4">
-          <summary className="cursor-pointer font-black text-sm">Option : vérifier le texte extrait du PDF</summary>
+          <summary className="cursor-pointer font-black text-sm">Option : voir le texte récupéré</summary>
           <textarea value={course} onChange={e=>setCourse(e.target.value)} className="mt-3 w-full min-h-64 rounded-xl border border-slate-300 p-3 text-sm leading-relaxed"></textarea>
         </details>
       </section>
 
       {library.length>0&&<section className="mt-5 bg-white border border-slate-200 rounded-3xl p-5 shadow-soft">
-        <h2 className="text-lg font-black flex items-center gap-2"><Icon name="library"/> Mes quiz publiés</h2>
-        <p className="mt-1 text-sm text-slate-600">Les QR déjà créés restent accessibles depuis cet appareil.</p>
+        <h2 className="text-lg font-black">Mes quiz publiés</h2>
         <div className="mt-4 space-y-3">
           {library.map(item=><div key={item.id} className="rounded-2xl border border-slate-200 p-4">
             <div className="font-black">{item.title}</div>
             <div className="mt-1 text-xs text-slate-500">{item.count} questions · {new Date(item.createdAt).toLocaleString("fr-FR")}</div>
-            <div className="mt-3 grid grid-cols-[1fr_auto] gap-2">
-              <button onClick={()=>reopenPublished(item)} className="tap rounded-xl bg-indigo-50 text-indigo-900 font-black px-3">Réafficher le QR</button>
-              <button onClick={()=>deleteFromLibrary(item.id)} className="tap rounded-xl bg-rose-50 text-rose-900 px-3" aria-label="Retirer de la bibliothèque"><Icon name="trash-2"/></button>
-            </div>
+            <button onClick={()=>reopen(item)} className="tap mt-3 w-full rounded-xl bg-indigo-50 text-indigo-900 font-black">Réafficher le QR</button>
           </div>)}
         </div>
       </section>}
