@@ -1,4 +1,4 @@
-import { put, get } from '@vercel/blob';
+import { put, get, del } from '@vercel/blob';
 
 function makeId() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -38,10 +38,11 @@ export default async function handler(req, res) {
     const id = makeId();
     const createdAt = payload.createdAt || new Date().toISOString();
     const title = String(payload.title || 'Quizz').slice(0, 100);
+    const version = Number.isFinite(Number(payload.version)) ? Number(payload.version) : 12;
     const pathname = `quizzes/${id}.json`;
     const data = JSON.stringify({
       app: 'quizz',
-      version: 5,
+      version,
       title,
       createdAt,
       questions: payload.questions,
@@ -54,8 +55,10 @@ export default async function handler(req, res) {
     });
 
     const current = await readIndex();
-    const entry = { id, title, count: payload.questions.length, createdAt };
-    const items = [entry, ...current.filter((x) => x?.id !== id)].slice(0, 100);
+    const entry = { id, title, count: payload.questions.length, createdAt, version };
+    const merged = [entry, ...current.filter((x) => x?.id !== id)];
+    const items = merged.slice(0, 100);
+    const stale = merged.slice(100).filter((x) => /^[A-Z2-9]{8}$/.test(String(x?.id || '')));
 
     await put('quizzes/index.json', JSON.stringify({ items }), {
       access: 'private',
@@ -63,6 +66,14 @@ export default async function handler(req, res) {
       addRandomSuffix: false,
       allowOverwrite: true,
     });
+
+    for (const old of stale) {
+      try {
+        await del(`quizzes/${old.id}.json`);
+      } catch (error) {
+        console.warn('cleanup stale quiz failed', old.id, error);
+      }
+    }
 
     res.setHeader('Cache-Control', 'no-store');
     return res.status(200).json({ id });
