@@ -11,9 +11,8 @@
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://unpkg.com/lucide@latest"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs" type="module"></script>
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
   <style>
     *{box-sizing:border-box}
@@ -24,6 +23,9 @@
     .tap{min-height:48px;min-width:48px}
     .shadow-soft{box-shadow:0 14px 35px rgba(15,23,42,.08)}
     :focus-visible{outline:3px solid #111827;outline-offset:3px}
+    @media (prefers-reduced-motion:reduce){
+      *{scroll-behavior:auto!important;transition:none!important;animation:none!important}
+    }
   </style>
 </head>
 <body>
@@ -32,10 +34,9 @@
 <script type="text/babel">
 const {useEffect,useMemo,useRef,useState}=React;
 
-/* =========================================================
-   EXEMPLE DE COURS — basé sur un vrai chapitre de maths
-========================================================= */
-const EXAMPLE_COURSE = `Chapitre : Distributivité et produits remarquables
+const STORAGE_API="https://superjsonblob.com/api/jsonBlob";
+
+const SAMPLE=`Chapitre : Distributivité et produits remarquables
 
 Définition : Une expression littérale est une expression dans laquelle des nombres sont représentés par des lettres appelées variables.
 
@@ -46,394 +47,41 @@ Définition : La valeur numérique d'une expression littérale est le nombre obt
 Définition : Une expression littérale réduite est une expression littérale qui ne contient plus de termes semblables.
 
 Méthode : Pour réduire une expression littérale, on additionne les termes semblables.
-Pour additionner ou soustraire des termes semblables, on recopie leur partie littérale et on additionne ou soustrait leurs coefficients.
+
+Méthode : Pour additionner ou soustraire des termes semblables, on recopie leur partie littérale et on additionne ou soustrait leurs coefficients.
 
 Méthode : Pour calculer un produit algébrique de monômes, on multiplie les coefficients entre eux puis les parties littérales entre elles.
 
-Propriété : Distributivité simple.
-k(a+b)=ka+kb
-k(a-b)=ka-kb
-
-Définition : Développer une expression littérale signifie transformer un produit algébrique en une somme algébrique.
+Propriété : La distributivité simple permet de transformer un produit en une somme ou une différence.
 
 Règle : Pour supprimer des parenthèses précédées d'un signe +, on recopie les termes sans changer leur signe.
+
 Règle : Pour supprimer des parenthèses précédées d'un signe -, on recopie les termes en changeant leur signe.
+
 Règle : Pour supprimer des parenthèses précédées d'un signe de multiplication, on applique la distributivité.
 
-Propriété : Double distributivité.
-(a+b)(c+d)=ac+ad+bc+bd
+Définition : Des binômes conjugués sont des binômes qui ne diffèrent que par le signe de l'un de leurs termes.
 
-Produit remarquable :
-(a+b)²=a²+2ab+b²
-Le carré d'une somme est égal à la somme des carrés augmentée du double produit.
+Propriété : Le carré d'une somme de deux termes est égal à la somme des carrés des deux termes augmentée du double produit de ces termes.
 
-Produit remarquable :
-(a-b)²=a²-2ab+b²
-Le carré d'une différence est égal à la somme des carrés diminuée du double produit.
+Propriété : Le carré d'une différence de deux termes est égal à la somme des carrés des deux termes diminuée du double produit de ces termes.
 
-Produit remarquable :
-(a+b)(a-b)=a²-b²
-Le produit de deux binômes conjugués est égal à une différence de deux carrés.
+Propriété : Le produit de deux binômes conjugués est égal à la différence entre le carré du terme qui ne change pas de signe et le carré de celui qui change de signe.`;
 
-Exemple : 3(x+2)=3x+6
-Exemple : (x+5)²=x²+10x+25
-Exemple : (x-4)²=x²-8x+16
-Exemple : (x+3)(x-3)=x²-9`;
+const ENCOURAGEMENT_OK=[
+  "Bravo ! C’est juste.",
+  "Très bien ! Continue comme ça.",
+  "Excellent, bonne réponse !",
+  "Bien joué !",
+  "Parfait !"
+];
 
-/* =========================================================
-   OUTILS
-========================================================= */
-const GOOD=["Bravo !","Bien joué !","Excellent !","Super !","C’est juste !"];
-
-function norm(t){
-  return String(t||"")
-    .replace(/\r/g,"\n")
-    .replace(/[ \t]+/g," ")
-    .replace(/\n{3,}/g,"\n\n")
-    .trim();
-}
-
-function shuffle(a){
-  const x=[...a];
-  for(let i=x.length-1;i>0;i--){
-    const j=Math.floor(Math.random()*(i+1));
-    [x[i],x[j]]=[x[j],x[i]];
-  }
-  return x;
-}
-
-function lines(text){
-  return norm(text).split("\n").map(x=>x.trim()).filter(Boolean);
-}
-
-function cleanLabel(s){
-  return s.replace(/^(définition|propriété|méthode|règle|rappel|remarque|attention|produit remarquable|exemple)\s*:\s*/i,"").trim();
-}
-
-function parseCourse(text){
-  // Le texte issu des PDF/Notability est souvent "aplati" et certains caractères
-  // sont mal reconnus (ex. Définition -> DéOinition). On normalise avant analyse.
-  const normalized = norm(text)
-    .replace(/DéOinition/gi,"Définition")
-    .replace(/DeOinition/gi,"Définition")
-    .replace(/Propriété/gi,"Propriété")
-    .replace(/Définition/gi,"Définition")
-    .replace(/Méthode/gi,"Méthode")
-    .replace(/Règle/gi,"Règle");
-
-  // Découpe non seulement aux retours ligne, mais aussi avant les marqueurs pédagogiques.
-  const expanded = normalized
-    .replace(/\s+(Définition\s*:)/gi,"\n$1")
-    .replace(/\s+(Propriété\s*:)/gi,"\n$1")
-    .replace(/\s+(Méthode\s*:)/gi,"\n$1")
-    .replace(/\s+(Règle\s*:)/gi,"\n$1")
-    .replace(/\s+(Rappel\s*:)/gi,"\n$1")
-    .replace(/\s+(Remarque\s*:)/gi,"\n$1")
-    .replace(/\s+(Exemple(?:s)?\s*:)/gi,"\n$1")
-    .replace(/\s+(Produit remarquable\s*:)/gi,"\n$1");
-
-  const ls=expanded.split("\n").map(x=>x.trim()).filter(Boolean);
-  const items=[];
-
-  for(let i=0;i<ls.length;i++){
-    const raw=ls[i];
-    let type=null;
-
-    if(/^(définition|definition)\s*:/i.test(raw)) type="definition";
-    else if(/^propriété\s*:/i.test(raw)) type="property";
-    else if(/^méthode\s*:/i.test(raw)) type="method";
-    else if(/^règle\s*:/i.test(raw)) type="rule";
-    else if(/^rappel\s*:/i.test(raw)) type="reminder";
-    else if(/^produit remarquable\s*:/i.test(raw)) type="identity";
-    else if(/^exemples?\s*:/i.test(raw)) type="example";
-
-    // Formules suffisamment explicites, y compris si elles commencent par des lettres.
-    const formula = raw.match(/([\(]?[a-zA-Z0-9]+(?:\s*[\+\-]\s*[a-zA-Z0-9]+)+[\)]?²?\s*=\s*[^.;]+)/);
-    if(formula && !type) type="formula";
-
-    if(type){
-      let content = raw
-        .replace(/^(définition|definition|propriété|méthode|règle|rappel|remarque|produit remarquable|exemples?)\s*:\s*/i,"")
-        .trim();
-
-      // Si le marqueur est seul, on prend la ligne suivante.
-      if(!content && ls[i+1]) content=ls[++i];
-
-      items.push({type,content,raw});
-      continue;
-    }
-
-    // Rattache les phrases de méthode/propriété qui suivent.
-    if(items.length && raw.length<260){
-      const prev=items[items.length-1];
-      if(["method","rule","property","identity","definition"].includes(prev.type) &&
-         /^(pour|on |le |la |les |un |une |quel que|soient|k\(|\(|[a-zA-Z0-9]+\()/i.test(raw)){
-        prev.content += " " + raw;
-      }
-    }
-  }
-
-  // MODE DE SECOURS :
-  // si peu de blocs formels ont été reconnus, on récupère les phrases porteuses de sens.
-  if(items.length<3){
-    const sentences = normalized
-      .split(/(?<=[.!?])\s+|\n+/)
-      .map(s=>s.trim())
-      .filter(s=>s.length>=25 && s.length<=240);
-
-    for(const s of sentences){
-      if(/est une|est un|signifie|permet de|pour .* il (?:faut|suffit)|on (?:ajoute|recopie|multiplie|applique|additionne|soustrait)|est égal à/i.test(s)){
-        const guessed = /est une|est un|signifie/i.test(s) ? "definition" :
-                        /pour .* il (?:faut|suffit)|on (?:ajoute|recopie|multiplie|applique|additionne|soustrait)/i.test(s) ? "method" :
-                        "property";
-        items.push({type:guessed,content:s,raw:s});
-      }
-    }
-  }
-
-  // Déduplication
-  const seen=new Set();
-  return items.filter(x=>{
-    const c=(x.content||"").trim();
-    if(c.length<5) return false;
-    const k=(x.type+"|"+c.toLowerCase()).slice(0,220);
-    if(seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  });
-}
-
-function topicFromDefinition(content){
-  const m=content.match(/^(.{2,70}?)\s+(?:est|sont|signifie|désigne|représente|correspond à)\s+(.+)$/i);
-  if(!m) return null;
-  return {subject:m[1].trim(),definition:m[2].trim()};
-}
-
-function distractDefinition(correct, pool){
-  const choices=pool.filter(x=>x!==correct && x.length>15 && x.length<150);
-  return shuffle([correct,...shuffle(choices).slice(0,3)]).slice(0,4);
-}
-
-function makeQuestions(text,count){
-  const items=parseCourse(text);
-  if(items.length<1) throw new Error("Je n’ai pas réussi à exploiter ce document. Essaie un PDF avec du texte sélectionnable ou une image plus nette.");
-
-  const definitionBodies=items
-    .filter(x=>x.type==="definition")
-    .map(x=>topicFromDefinition(x.content))
-    .filter(Boolean)
-    .map(x=>x.definition);
-
-  const qs=[];
-
-  // Définitions
-  items.filter(x=>x.type==="definition").forEach((it,idx)=>{
-    const d=topicFromDefinition(it.content);
-    if(!d) return;
-    const opts=distractDefinition(d.definition,definitionBodies);
-    if(opts.length>=2){
-      qs.push({
-        id:"def-"+idx,
-        q:`Quelle définition correspond à « ${d.subject} » ?`,
-        o:opts,
-        a:d.definition,
-        x:`${d.subject} ${/^(est|sont)/i.test(d.definition)?"":"est "} ${d.definition}`,
-        s:it.content
-      });
-    }
-  });
-
-  // Méthodes/règles
-  items.filter(x=>["method","rule"].includes(x.type)).forEach((it,idx)=>{
-    let q="Quelle règle faut-il appliquer ?";
-    const c=it.content;
-    if(/réduire une expression/i.test(c)) q="Comment réduit-on une expression littérale ?";
-    else if(/parenthèses.*signe \+/i.test(c)) q="Que fait-on pour supprimer des parenthèses précédées d’un signe + ?";
-    else if(/parenthèses.*signe -/i.test(c)) q="Que fait-on pour supprimer des parenthèses précédées d’un signe − ?";
-    else if(/produit algébrique/i.test(c)) q="Comment calcule-t-on un produit algébrique de monômes ?";
-
-    const wrongPool=[
-      "On change systématiquement tous les signes.",
-      "On additionne tous les nombres et toutes les lettres.",
-      "On supprime les parenthèses sans modifier l’expression.",
-      "On divise les coefficients puis on additionne les lettres."
-    ];
-    qs.push({
-      id:"meth-"+idx,
-      q,
-      o:shuffle([c,...shuffle(wrongPool).slice(0,3)]),
-      a:c,
-      x:c,
-      s:c
-    });
-  });
-
-  // Formules exactes
-  const formulaPairs=[];
-  const sourceLines=lines(text);
-  sourceLines.forEach((l,i)=>{
-    const m=l.match(/^(.+?)=(.+)$/);
-    if(m && /[a-zA-Z]/.test(l) && l.length<90){
-      formulaPairs.push({left:m[1].trim(),right:m[2].trim(),raw:l});
-    }
-  });
-
-  formulaPairs.forEach((f,idx)=>{
-    let wrong=[
-      f.right.replace(/\+/g,"-"),
-      f.right.replace(/-/g,"+"),
-      f.right.replace(/2([a-zA-Z])/g,"$1"),
-      f.right.replace(/²/g,"")
-    ].filter(x=>x!==f.right && x.length>0);
-
-    wrong=[...new Set(wrong)];
-    while(wrong.length<3) wrong.push("Aucune de ces expressions");
-    qs.push({
-      id:"form-"+idx,
-      q:`Complète correctement : ${f.left} = …`,
-      o:shuffle([f.right,...wrong.slice(0,3)]),
-      a:f.right,
-      x:`La formule correcte est : ${f.raw}`,
-      s:f.raw
-    });
-  });
-
-  // Exemples calculés
-  items.filter(x=>x.type==="example").forEach((it,idx)=>{
-    const m=it.content.match(/^(.+?)=(.+)$/);
-    if(!m) return;
-    const left=m[1].trim(), right=m[2].trim();
-    const wrong=[
-      right.replace(/\+/g,"-"),
-      right.replace(/-/g,"+"),
-      right.replace(/\d+/g,n=>String(Number(n)+1))
-    ].filter(x=>x!==right);
-    qs.push({
-      id:"ex-"+idx,
-      q:`Quel est le développement correct de ${left} ?`,
-      o:shuffle([right,...wrong.slice(0,3)]),
-      a:right,
-      x:`D’après l’exemple du cours : ${left}=${right}`,
-      s:it.content
-    });
-  });
-
-  // Propriétés en compréhension
-  items.filter(x=>["property","identity"].includes(x.type)).forEach((it,idx)=>{
-    const c=it.content;
-    if(/distributivité simple/i.test(c)){
-      qs.push({
-        id:"prop-ds-"+idx,
-        q:"À quoi sert la distributivité simple dans ce chapitre ?",
-        o:shuffle([
-          "À transformer un produit en une somme ou une différence.",
-          "À calculer uniquement des puissances.",
-          "À supprimer les variables.",
-          "À transformer une somme en quotient."
-        ]),
-        a:"À transformer un produit en une somme ou une différence.",
-        x:"La distributivité simple permet de développer une expression.",
-        s:c
-      });
-    }
-    if(/double distributivité/i.test(c)){
-      qs.push({
-        id:"prop-dd-"+idx,
-        q:"Combien de produits obtient-on lorsqu’on développe (a+b)(c+d) ?",
-        o:shuffle(["4","2","3","6"]),
-        a:"4",
-        x:"On obtient ac + ad + bc + bd, donc quatre produits.",
-        s:c
-      });
-    }
-  });
-
-  // Fallback pédagogique : si le document contient peu de blocs balisés,
-  // on crée des questions de compréhension à partir des phrases-clés.
-  if(qs.length<count){
-    const sourceSentences = norm(text)
-      .replace(/DéOinition/gi,"Définition")
-      .split(/(?<=[.!?])\s+|\n+/)
-      .map(s=>s.trim())
-      .filter(s=>s.length>=25 && s.length<=220)
-      .filter(s=>/est une|est un|signifie|permet de|pour .* il (?:faut|suffit)|on (?:ajoute|recopie|multiplie|applique|additionne|soustrait)|est égal à/i.test(s));
-
-    sourceSentences.forEach((s,i)=>{
-      let question="Quelle affirmation est correcte d’après le cours ?";
-      if(/pour .* il (?:faut|suffit)/i.test(s)) question="Quelle méthode est correcte d’après le cours ?";
-      else if(/est une|est un|signifie/i.test(s)) question="Quelle définition est correcte d’après le cours ?";
-
-      const wrongPool=[
-        "Cette affirmation n’apparaît pas dans le cours.",
-        "On applique toujours la règle inverse.",
-        "On peut effectuer l’opération sans tenir compte des signes."
-      ];
-
-      qs.push({
-        id:"fallback-"+i,
-        q:question,
-        o:shuffle([s,...wrongPool]),
-        a:s,
-        x:`Le cours indique : « ${s} »`,
-        s:s
-      });
-    });
-  }
-
-  // Déduplication et sélection
-  const seen=new Set();
-  const unique=[];
-  for(const q of shuffle(qs)){
-    if(!seen.has(q.q)){
-      seen.add(q.q);
-      unique.push(q);
-    }
-  }
-
-  if(unique.length===0) throw new Error("Je n’ai pas réussi à fabriquer de bonnes questions avec ce document.");
-
-  // Si on en manque, on recycle proprement
-  const out=[];
-  let i=0;
-  while(out.length<count){
-    const base=unique[i%unique.length];
-    out.push({...base,id:base.id+"-"+i});
-    i++;
-    if(i>200) break;
-  }
-  return out.slice(0,count);
-}
-
-async function extractPdfText(file,onProgress){
-  const ab=await file.arrayBuffer();
-  const pdfjs=await import("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs");
-  pdfjs.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
-  const pdf=await pdfjs.getDocument({data:ab}).promise;
-  let out=[];
-  for(let p=1;p<=pdf.numPages;p++){
-    onProgress(`Lecture du PDF : page ${p}/${pdf.numPages}`);
-    const page=await pdf.getPage(p);
-    const tc=await page.getTextContent();
-    out.push(tc.items.map(x=>x.str).join(" "));
-  }
-  return norm(out.join("\n"));
-}
-
-async function ocrImage(file,onProgress){
-  const r=await Tesseract.recognize(file,"fra",{
-    logger:m=>{
-      if(m.status==="recognizing text") onProgress(`Lecture de l’image : ${Math.round((m.progress||0)*100)} %`);
-    }
-  });
-  return norm(r?.data?.text||"");
-}
-
-function shortCode(){
-  const chars="ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let s="";
-  for(let i=0;i<6;i++) s+=chars[Math.floor(Math.random()*chars.length)];
-  return s;
-}
+const ENCOURAGEMENT_BAD=[
+  "Pas cette fois, mais regarde l’explication.",
+  "Ce n’est pas grave : retiens la règle pour la suivante.",
+  "Bonne tentative. Voici ce qu’il fallait retenir.",
+  "Tu progresses : regarde le rappel du cours."
+];
 
 function Icon({name,size=20}){
   const ref=useRef(null);
@@ -446,295 +94,752 @@ function Icon({name,size=20}){
   return <span ref={ref} className="inline-flex shrink-0" aria-hidden="true"/>;
 }
 
+function normalizeText(t){
+  return String(t||"")
+    .replace(/\r/g,"\n")
+    .replace(/DéOinition/gi,"Définition")
+    .replace(/DeOinition/gi,"Définition")
+    .replace(/Définition/gi,"Définition")
+    .replace(/Propriété/gi,"Propriété")
+    .replace(/Méthode/gi,"Méthode")
+    .replace(/Règle/gi,"Règle")
+    .replace(/coefOicient/gi,"coefficient")
+    .replace(/sufOit/gi,"suffit")
+    .replace(/[ \t]+/g," ")
+    .replace(/\n{3,}/g,"\n\n")
+    .trim();
+}
+
+function cleanStatement(s){
+  return s
+    .replace(/[Ø]/g," ")
+    .replace(/\.{4,}/g," ")
+    .replace(/_{3,}/g," ")
+    .replace(/\s+/g," ")
+    .trim();
+}
+
+function isCleanFrench(s){
+  if(!s||s.length<18||s.length>240)return false;
+  if((s.match(/[A-Za-zÀ-ÿ]/g)||[]).length<12)return false;
+  const weird=(s.match(/[^\p{L}\p{N}\s'’.,;:!?+\-()²=\/]/gu)||[]).length;
+  if(weird>5)return false;
+  if(/[█■□]{2,}/.test(s))return false;
+  return true;
+}
+
+function extractPedagogicalItems(text){
+  let t=normalizeText(text);
+
+  // force des séparations devant les marqueurs pédagogiques, même sur PDF aplati
+  t=t
+    .replace(/\s+(Définition\s*:)/gi,"\n$1")
+    .replace(/\s+(Propriété\s*:)/gi,"\n$1")
+    .replace(/\s+(Méthode\s*:)/gi,"\n$1")
+    .replace(/\s+(Règle\s*:)/gi,"\n$1")
+    .replace(/\s+(Rappel\s*:)/gi,"\n$1")
+    .replace(/\s+(Remarque\s*:)/gi,"\n$1");
+
+  const chunks=t.split("\n").map(cleanStatement).filter(Boolean);
+  const items=[];
+
+  for(const raw of chunks){
+    const m=raw.match(/^(Définition|Propriété|Méthode|Règle|Rappel)\s*:\s*(.+)$/i);
+    if(m){
+      const type=m[1].toLowerCase();
+      let content=cleanStatement(m[2]);
+      // coupe si un autre marqueur s'est collé derrière
+      content=content.split(/\s+(?=Définition|Propriété|Méthode|Règle|Rappel)\s*:/i)[0].trim();
+      if(isCleanFrench(content))items.push({type,content});
+    }
+  }
+
+  // secours : phrases sémantiques propres
+  const sentences=t
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map(cleanStatement)
+    .filter(isCleanFrench)
+    .filter(s=>/est une|est un|sont des|signifie|permet de|pour .* on |pour .* il faut|pour .* il suffit|on recopie|on additionne|on multiplie|on applique|est égal à/i.test(s));
+
+  for(const s of sentences){
+    const content=s.replace(/^(Définition|Propriété|Méthode|Règle|Rappel)\s*:\s*/i,"").trim();
+    if(!items.some(x=>x.content.toLowerCase()===content.toLowerCase())){
+      const type=/est une|est un|sont des|signifie/i.test(content)?"définition":
+                 /pour |on recopie|on additionne|on multiplie|on applique/i.test(content)?"méthode":"propriété";
+      items.push({type,content});
+    }
+  }
+
+  return items;
+}
+
+function parseDefinition(s){
+  const m=s.match(/^(.{2,80}?)\s+(est une|est un|sont des|signifie|désigne)\s+(.+)$/i);
+  if(!m)return null;
+  return {term:m[1].trim(),verb:m[2].trim(),definition:m[3].trim()};
+}
+
+function shuffle(a){
+  const x=[...a];
+  for(let i=x.length-1;i>0;i--){
+    const j=Math.floor(Math.random()*(i+1));
+    [x[i],x[j]]=[x[j],x[i]];
+  }
+  return x;
+}
+
+function sampleWrong(correct,pool,n=3){
+  return shuffle(pool.filter(x=>x!==correct)).slice(0,n);
+}
+
+function buildQuiz(text,count){
+  const items=extractPedagogicalItems(text);
+
+  const defs=items.map(x=>({...x,parsed:parseDefinition(x.content)})).filter(x=>x.parsed);
+  const methods=items.filter(x=>["méthode","règle","propriété","rappel"].includes(x.type) && isCleanFrench(x.content));
+
+  if(defs.length+methods.length<3){
+    throw new Error("Le document est lisible, mais je ne trouve pas assez de règles ou définitions propres pour fabriquer un quiz fiable.");
+  }
+
+  const questions=[];
+
+  // 1. définition -> explication
+  defs.forEach((d,i)=>{
+    const correct=d.parsed.definition;
+    const pool=defs.map(x=>x.parsed.definition).filter(isCleanFrench);
+    const opts=shuffle([correct,...sampleWrong(correct,pool,3)]);
+    if(opts.length>=2){
+      questions.push({
+        id:`def-forward-${i}`,
+        question:`Quelle définition correspond à « ${d.parsed.term} » ?`,
+        options:opts,
+        answer:correct,
+        hint:`Cherche dans le cours la définition de « ${d.parsed.term} ».`,
+        explanation:`${d.parsed.term} ${d.parsed.verb} ${correct}.`,
+        source:d.content
+      });
+    }
+  });
+
+  // 2. définition inverse
+  defs.forEach((d,i)=>{
+    const correct=d.parsed.term;
+    const pool=defs.map(x=>x.parsed.term);
+    const opts=shuffle([correct,...sampleWrong(correct,pool,3)]);
+    if(opts.length>=2){
+      questions.push({
+        id:`def-reverse-${i}`,
+        question:`Quel terme correspond à cette définition : « ${d.parsed.definition} » ?`,
+        options:opts,
+        answer:correct,
+        hint:"Repère le mot ou l’expression défini(e) dans le cours.",
+        explanation:`Il s’agit de « ${correct} ».`,
+        source:d.content
+      });
+    }
+  });
+
+  // 3. règles / méthodes : choix entre vraies règles du cours
+  methods.forEach((m,i)=>{
+    const correct=m.content;
+    const pool=methods.map(x=>x.content).filter(x=>x.length<190);
+    const opts=shuffle([correct,...sampleWrong(correct,pool,3)]);
+    if(opts.length>=2){
+      let question="Quelle affirmation est correcte d’après le cours ?";
+      if(/réduire une expression/i.test(correct)) question="Comment réduit-on une expression littérale ?";
+      else if(/parenthèses.*signe \+/i.test(correct)) question="Que fait-on lorsque des parenthèses sont précédées d’un signe + ?";
+      else if(/parenthèses.*signe -/i.test(correct)) question="Que fait-on lorsque des parenthèses sont précédées d’un signe − ?";
+      else if(/produit algébrique/i.test(correct)) question="Comment calcule-t-on un produit algébrique de monômes ?";
+      else if(/distributivité/i.test(correct)) question="Quelle proposition sur la distributivité est correcte ?";
+
+      questions.push({
+        id:`method-${i}`,
+        question,
+        options:opts,
+        answer:correct,
+        hint:"Relis la règle ou la méthode correspondante dans le cours.",
+        explanation:correct,
+        source:correct
+      });
+    }
+  });
+
+  // 4. vrai/faux propres, à partir des définitions exactes
+  defs.forEach((d,i)=>{
+    questions.push({
+      id:`true-${i}`,
+      question:`Vrai ou faux : « ${d.content} »`,
+      options:["Vrai","Faux"],
+      answer:"Vrai",
+      hint:`Relis la définition de « ${d.parsed.term} ».`,
+      explanation:`Cette phrase reprend la définition du cours.`,
+      source:d.content
+    });
+
+    if(defs.length>1){
+      const other=defs[(i+1)%defs.length];
+      const falseSentence=`${d.parsed.term} ${d.parsed.verb} ${other.parsed.definition}.`;
+      questions.push({
+        id:`false-${i}`,
+        question:`Vrai ou faux : « ${falseSentence} »`,
+        options:["Vrai","Faux"],
+        answer:"Faux",
+        hint:`Compare avec la vraie définition de « ${d.parsed.term} ».`,
+        explanation:`La bonne définition est : ${d.content}.`,
+        source:d.content
+      });
+    }
+  });
+
+  // filtrage et déduplication
+  const seen=new Set();
+  const clean=questions.filter(q=>{
+    if(!isCleanFrench(q.question.replace(/[«»]/g,"")))return false;
+    if(q.options.some(o=>typeof o!=="string"||o.length>230))return false;
+    const key=q.question.toLowerCase();
+    if(seen.has(key))return false;
+    seen.add(key);
+    return true;
+  });
+
+  if(clean.length<5){
+    throw new Error("Le PDF est trop mal extrait pour créer automatiquement un quiz propre. Essaie l’export PDF depuis Notability avec texte sélectionnable, ou une photo nette.");
+  }
+
+  const selected=[];
+  let cursor=0;
+  while(selected.length<count){
+    const base=clean[cursor%clean.length];
+    selected.push({...base,id:`${base.id}-${selected.length}`});
+    cursor++;
+    if(cursor>200)break;
+  }
+
+  return shuffle(selected).slice(0,count);
+}
+
+async function extractPdfText(file,onProgress){
+  const pdfjs=await import("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs");
+  pdfjs.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
+
+  const pdf=await pdfjs.getDocument({data:await file.arrayBuffer()}).promise;
+  const pages=[];
+  for(let p=1;p<=pdf.numPages;p++){
+    onProgress(`Lecture du PDF : page ${p}/${pdf.numPages}`);
+    const page=await pdf.getPage(p);
+    const tc=await page.getTextContent();
+    pages.push(tc.items.map(x=>x.str).join(" "));
+  }
+  return normalizeText(pages.join("\n"));
+}
+
+async function ocrImage(file,onProgress){
+  if(!window.Tesseract)throw new Error("Le module de lecture d’image ne s’est pas chargé.");
+  const result=await Tesseract.recognize(file,"fra",{
+    logger:m=>{
+      if(m.status==="recognizing text"){
+        onProgress(`Lecture de l’image : ${Math.round((m.progress||0)*100)} %`);
+      }
+    }
+  });
+  return normalizeText(result.data.text||"");
+}
+
+async function publishQuiz(payload){
+  const res=await fetch(STORAGE_API,{
+    method:"POST",
+    headers:{"Content-Type":"application/json","Accept":"application/json"},
+    body:JSON.stringify(payload)
+  });
+  if(!res.ok)throw new Error("Impossible de publier le quiz en ligne.");
+  const data=await res.json();
+  if(!data.id)throw new Error("Le service de publication n’a pas renvoyé d’identifiant.");
+  return data.id;
+}
+
+async function loadPublishedQuiz(id){
+  const res=await fetch(`${STORAGE_API}/${encodeURIComponent(id)}`,{
+    headers:{"Accept":"application/json"}
+  });
+  if(!res.ok)throw new Error("Quiz introuvable ou indisponible.");
+  return await res.json();
+}
+
+function makeStudentUrl(id){
+  const u=new URL(location.href);
+  u.search="";
+  u.hash="";
+  u.searchParams.set("quiz",id);
+  return u.toString();
+}
+
+function saveLibrary(entry){
+  try{
+    const current=JSON.parse(localStorage.getItem("quizz-maths-library-v2")||"[]");
+    const next=[entry,...current.filter(x=>x.id!==entry.id)].slice(0,40);
+    localStorage.setItem("quizz-maths-library-v2",JSON.stringify(next));
+    return next;
+  }catch{
+    return [entry];
+  }
+}
+
+function getLibrary(){
+  try{return JSON.parse(localStorage.getItem("quizz-maths-library-v2")||"[]")}
+  catch{return[]}
+}
+
 function Toast({value,onClose}){
   useEffect(()=>{
     if(!value)return;
-    const id=setTimeout(onClose,3500);
+    const id=setTimeout(onClose,4000);
     return()=>clearTimeout(id);
   },[value]);
   if(!value)return null;
-  return <div className="fixed z-50 left-3 right-3 bottom-4 flex justify-center">
-    <div className={`max-w-lg w-full rounded-2xl px-4 py-3 shadow-soft border font-semibold flex gap-3 ${
+  return <div className="fixed z-50 left-3 right-3 bottom-4 flex justify-center" aria-live="polite">
+    <div className={`max-w-lg w-full rounded-2xl border px-4 py-3 shadow-soft font-semibold flex gap-3 ${
       value.type==="error"?"bg-rose-50 border-rose-200 text-rose-900":
       value.type==="success"?"bg-emerald-50 border-emerald-200 text-emerald-900":
       "bg-white border-slate-200"
     }`}>
       <Icon name={value.type==="error"?"circle-alert":value.type==="success"?"circle-check":"info"}/>
-      <span>{value.msg}</span>
+      <span>{value.text}</span>
     </div>
   </div>
 }
 
 function App(){
-  const [screen,setScreen]=useState("home");
-  const [course,setCourse]=useState(EXAMPLE_COURSE);
-  const [count,setCount]=useState(15);
-  const [quiz,setQuiz]=useState([]);
+  const studentQuizId=new URLSearchParams(location.search).get("quiz");
+
+  const [mode,setMode]=useState(studentQuizId?"student-loading":"teacher");
   const [title,setTitle]=useState("Quizz Maths");
-  const [fileName,setFileName]=useState("");
+  const [count,setCount]=useState(15);
+  const [course,setCourse]=useState(SAMPLE);
+  const [filename,setFilename]=useState("");
   const [busy,setBusy]=useState("");
   const [toast,setToast]=useState(null);
+  const [quiz,setQuiz]=useState([]);
+  const [publishedId,setPublishedId]=useState("");
+  const [publishedUrl,setPublishedUrl]=useState("");
+  const [library,setLibrary]=useState(getLibrary());
 
-  const [idx,setIdx]=useState(0);
-  const [sel,setSel]=useState("");
-  const [answers,setAnswers]=useState({});
+  const [index,setIndex]=useState(0);
+  const [selected,setSelected]=useState("");
   const [feedback,setFeedback]=useState(null);
-  const [showCourse,setShowCourse]=useState(false);
-
-  const [publishOpen,setPublishOpen]=useState(false);
-  const [publishCode,setPublishCode]=useState("");
+  const [showHint,setShowHint]=useState(false);
+  const [answers,setAnswers]=useState({});
   const qrRef=useRef(null);
 
-  const q=quiz[idx];
-  const correct=Object.values(answers).filter(x=>x.correct).length;
+  const current=quiz[index];
+  const correctCount=Object.values(answers).filter(a=>a.correct).length;
 
-  async function importFile(e){
-    const f=e.target.files?.[0];
-    if(!f)return;
-    setFileName(f.name);
+  useEffect(()=>{
+    if(!studentQuizId)return;
+    (async()=>{
+      try{
+        const data=await loadPublishedQuiz(studentQuizId);
+        if(!Array.isArray(data.questions))throw new Error("Format de quiz invalide.");
+        setTitle(data.title||"Quizz Maths");
+        setQuiz(data.questions);
+        setPublishedId(studentQuizId);
+        setMode("student-intro");
+      }catch(e){
+        setMode("student-error");
+        setToast({type:"error",text:e.message});
+      }
+    })();
+  },[]);
+
+  useEffect(()=>{
+    if(mode!=="published"||!publishedUrl||!qrRef.current)return;
+    qrRef.current.innerHTML="";
+    new QRCode(qrRef.current,{
+      text:publishedUrl,
+      width:260,
+      height:260,
+      correctLevel:QRCode.CorrectLevel.M
+    });
+  },[mode,publishedUrl]);
+
+  async function handleFile(e){
+    const file=e.target.files?.[0];
+    if(!file)return;
+    setFilename(file.name);
     try{
-      if(f.type==="application/pdf"||f.name.toLowerCase().endsWith(".pdf")){
+      if(file.type==="application/pdf"||file.name.toLowerCase().endsWith(".pdf")){
         setBusy("Lecture du PDF…");
-        const text=await extractPdfText(f,setBusy);
+        const text=await extractPdfText(file,setBusy);
         setCourse(text);
         setBusy("");
-        setToast({type:"success",msg:"Cours importé. Tu peux générer le quiz."});
+        setToast({type:"success",text:"PDF importé. Choisis le nombre de questions puis crée le quiz."});
         return;
       }
-      if(f.type.startsWith("image/")){
+
+      if(file.type.startsWith("image/")){
         setBusy("Lecture de l’image…");
-        const text=await ocrImage(f,setBusy);
+        const text=await ocrImage(file,setBusy);
         setCourse(text);
         setBusy("");
-        setToast({type:"success",msg:"Image lue. Vérifie rapidement le texte puis génère le quiz."});
+        setToast({type:"success",text:"Image lue. Tu peux créer le quiz."});
         return;
       }
-      if(f.type.startsWith("text/")||/\.(txt|md|csv)$/i.test(f.name)){
-        setCourse(norm(await f.text()));
-        setToast({type:"success",msg:"Cours importé."});
+
+      if(file.type.startsWith("text/")||/\.(txt|md|csv)$/i.test(file.name)){
+        setCourse(normalizeText(await file.text()));
+        setToast({type:"success",text:"Fichier importé."});
         return;
       }
+
       throw new Error("Utilise un PDF, une image ou un fichier texte.");
-    }catch(err){
+    }catch(e){
       setBusy("");
-      setToast({type:"error",msg:err.message||"Import impossible."});
+      setToast({type:"error",text:e.message});
     }
   }
 
-  function generate(){
+  async function createAndPublish(){
     try{
-      const qs=makeQuestions(course,count);
-      setQuiz(qs);
-      setScreen("preview");
-      setToast({type:"success",msg:`${qs.length} questions générées.`});
-    }catch(err){
-      setToast({type:"error",msg:err.message});
+      setBusy("Création des questions…");
+      const questions=buildQuiz(course,count);
+
+      setBusy("Publication du quiz…");
+      const payload={
+        app:"quizz-maths",
+        version:2,
+        title,
+        createdAt:new Date().toISOString(),
+        questions
+      };
+
+      const id=await publishQuiz(payload);
+      const url=makeStudentUrl(id);
+
+      setQuiz(questions);
+      setPublishedId(id);
+      setPublishedUrl(url);
+
+      const entry={
+        id,
+        title,
+        count:questions.length,
+        createdAt:new Date().toISOString(),
+        url
+      };
+      setLibrary(saveLibrary(entry));
+
+      setBusy("");
+      setMode("published");
+      setToast({type:"success",text:"Quiz créé et publié. Le QR élève est prêt."});
+    }catch(e){
+      setBusy("");
+      setToast({type:"error",text:e.message});
     }
   }
 
-  function start(){
-    setIdx(0);
-    setSel("");
-    setAnswers({});
+  function startStudentQuiz(){
+    setIndex(0);
+    setSelected("");
     setFeedback(null);
-    setShowCourse(false);
-    setScreen("quiz");
+    setShowHint(false);
+    setAnswers({});
+    setMode("student-quiz");
+    window.scrollTo(0,0);
   }
 
-  function validate(){
-    if(!sel||!q)return;
-    const ok=sel===q.a;
-    setAnswers(v=>({...v,[q.id]:{selected:sel,correct:ok}}));
+  function validateAnswer(){
+    if(!selected||!current||feedback)return;
+    const ok=selected===current.answer;
+    setAnswers(a=>({...a,[current.id]:{selected,correct:ok}}));
     setFeedback({
       correct:ok,
-      msg:ok?GOOD[(idx+correct)%GOOD.length]:`Bonne réponse : ${q.a}`
+      message:ok
+        ? ENCOURAGEMENT_OK[(index+correctCount)%ENCOURAGEMENT_OK.length]
+        : ENCOURAGEMENT_BAD[(index+correctCount)%ENCOURAGEMENT_BAD.length]
     });
   }
 
-  function next(){
-    if(idx+1>=quiz.length){
-      setScreen("results");
+  function nextQuestion(){
+    if(index+1>=quiz.length){
+      setMode("student-results");
       window.scrollTo(0,0);
       return;
     }
-    setIdx(i=>i+1);
-    setSel("");
+    setIndex(i=>i+1);
+    setSelected("");
     setFeedback(null);
-    setShowCourse(false);
+    setShowHint(false);
+    window.scrollTo({top:0,behavior:"smooth"});
   }
 
-  function publish(){
-    const code=shortCode();
-    setPublishCode(code);
-    setPublishOpen(true);
-    setTimeout(()=>{
-      if(!qrRef.current)return;
-      qrRef.current.innerHTML="";
-      const base=location.href.split("#")[0];
-      const target=base+"#q="+code;
-      new QRCode(qrRef.current,{text:target,width:240,height:240,correctLevel:QRCode.CorrectLevel.M});
-    },50);
+  function openTeacherTest(){
+    startStudentQuiz();
   }
 
-  if(screen==="home"){
-    return <main className="min-h-screen">
-      <header className="bg-gradient-to-br from-indigo-700 via-violet-700 to-fuchsia-700 text-white">
-        <div className="max-w-4xl mx-auto px-4 py-8 sm:py-10">
-          <div className="flex gap-4 items-start">
-            <div className="w-14 h-14 rounded-2xl bg-white/15 grid place-items-center"><Icon name="sigma" size={30}/></div>
-            <div>
-              <p className="uppercase tracking-[.2em] text-xs font-black text-indigo-100">Professeur</p>
-              <h1 className="text-3xl sm:text-4xl font-black mt-1">Quizz Maths</h1>
-              <p className="mt-2 text-indigo-100">Importer → Générer → Tester → Publier.</p>
-            </div>
-          </div>
-        </div>
-      </header>
+  async function reopenPublished(item){
+    try{
+      setBusy("Chargement du quiz…");
+      const data=await loadPublishedQuiz(item.id);
+      setQuiz(data.questions||[]);
+      setTitle(data.title||item.title);
+      setPublishedId(item.id);
+      setPublishedUrl(item.url||makeStudentUrl(item.id));
+      setBusy("");
+      setMode("published");
+    }catch(e){
+      setBusy("");
+      setToast({type:"error",text:e.message});
+    }
+  }
 
-      <div className="max-w-4xl mx-auto px-4 py-6">
-        <section className="bg-white border border-slate-200 rounded-3xl p-5 sm:p-7 shadow-soft">
-          <h2 className="text-xl font-black">1. Importe ton cours</h2>
+  function deleteFromLibrary(id){
+    const next=library.filter(x=>x.id!==id);
+    localStorage.setItem("quizz-maths-library-v2",JSON.stringify(next));
+    setLibrary(next);
+  }
 
-          <label className="mt-4 tap w-full border-2 border-dashed border-indigo-300 bg-indigo-50 hover:bg-indigo-100 rounded-2xl px-4 py-6 flex justify-center items-center gap-3 cursor-pointer font-black text-indigo-900">
-            <Icon name="upload"/>
-            <span>{fileName||"PDF Notability, photo ou fichier"}</span>
-            <input className="sr-only" type="file" accept=".pdf,image/*,.txt,.md,.csv" onChange={importFile}/>
-          </label>
-
-          {busy&&<div className="mt-4 rounded-2xl bg-amber-50 border border-amber-200 p-4 font-bold text-amber-900">{busy}</div>}
-
-          <div className="mt-5 grid sm:grid-cols-2 gap-4">
-            <label className="font-black">Nombre de questions
-              <select value={count} onChange={e=>setCount(Number(e.target.value))} className="mt-2 w-full tap rounded-xl border border-slate-300 px-3 bg-white">
-                {[10,15,20,25,30].map(n=><option key={n}>{n}</option>)}
-              </select>
-            </label>
-            <label className="font-black">Titre
-              <input value={title} onChange={e=>setTitle(e.target.value)} className="mt-2 w-full tap rounded-xl border border-slate-300 px-3"/>
-            </label>
-          </div>
-
-          <details className="mt-5 rounded-2xl border border-slate-200 p-4">
-            <summary className="cursor-pointer font-black">Voir / corriger le texte extrait</summary>
-            <textarea value={course} onChange={e=>setCourse(e.target.value)} className="mt-3 w-full min-h-72 rounded-xl border border-slate-300 p-3 leading-relaxed"/>
-          </details>
-
-          <button onClick={generate} disabled={!!busy} className="tap mt-5 w-full rounded-2xl bg-indigo-700 disabled:bg-slate-300 text-white font-black px-5 flex justify-center items-center gap-2">
-            <Icon name="sparkles"/> Générer le quiz
-          </button>
-        </section>
-
-        <section className="mt-5 bg-slate-900 text-white rounded-3xl p-5">
-          <h2 className="font-black flex gap-2 items-center"><Icon name="wand-sparkles"/> Nouveau moteur</h2>
-          <p className="mt-2 text-sm text-slate-200">Le moteur accepte désormais aussi les PDF Notability imparfaitement lus : il repère les définitions, propriétés, méthodes, règles et formules, puis utilise un mode de secours sur les phrases importantes si nécessaire.</p>
-        </section>
+  /* -------------------- STUDENT LOADING -------------------- */
+  if(mode==="student-loading"){
+    return <main className="min-h-screen grid place-items-center px-4">
+      <div className="text-center">
+        <div className="w-16 h-16 rounded-2xl bg-indigo-100 text-indigo-700 mx-auto grid place-items-center"><Icon name="loader-circle" size={32}/></div>
+        <h1 className="mt-4 text-2xl font-black">Chargement du quiz…</h1>
+        <p className="mt-2 text-slate-600">Quelques secondes.</p>
       </div>
+    </main>
+  }
+
+  if(mode==="student-error"){
+    return <main className="min-h-screen grid place-items-center px-4">
+      <section className="max-w-md w-full bg-white border border-rose-200 rounded-3xl p-6 text-center shadow-soft">
+        <Icon name="circle-alert" size={42}/>
+        <h1 className="text-2xl font-black mt-3">Quiz indisponible</h1>
+        <p className="text-slate-600 mt-2">Le lien ou le QR code n’est plus accessible.</p>
+      </section>
       <Toast value={toast} onClose={()=>setToast(null)}/>
     </main>
   }
 
-  if(screen==="preview"){
-    return <main className="min-h-screen bg-slate-50 px-4 py-6">
-      <div className="max-w-4xl mx-auto">
-        <button onClick={()=>setScreen("home")} className="tap rounded-xl px-3 font-bold flex gap-2 items-center"><Icon name="arrow-left"/> Retour</button>
-        <section className="mt-3 bg-white border border-slate-200 rounded-3xl p-5 sm:p-7 shadow-soft">
-          <p className="uppercase tracking-[.18em] text-xs font-black text-indigo-700">Aperçu</p>
-          <h1 className="text-2xl sm:text-3xl font-black mt-1">{title}</h1>
-          <p className="text-slate-600 mt-2">{quiz.length} questions générées.</p>
-
-          <div className="mt-5 space-y-3">
-            {quiz.slice(0,10).map((x,i)=><div key={x.id} className="rounded-2xl border border-slate-200 p-4">
-              <div className="font-black">{i+1}. {x.q}</div>
-              <div className="mt-2 text-sm text-emerald-800"><strong>Réponse :</strong> {x.a}</div>
-            </div>)}
-          </div>
-          {quiz.length>10&&<p className="mt-3 text-sm text-slate-500">+ {quiz.length-10} autres questions</p>}
-
-          <div className="mt-6 grid sm:grid-cols-2 gap-3">
-            <button onClick={start} className="tap rounded-2xl bg-indigo-700 text-white font-black px-4 flex items-center justify-center gap-2"><Icon name="play"/> Tester le quiz</button>
-            <button onClick={publish} className="tap rounded-2xl bg-emerald-600 text-white font-black px-4 flex items-center justify-center gap-2"><Icon name="qr-code"/> Publier & QR</button>
-          </div>
-        </section>
-      </div>
-
-      {publishOpen&&<div className="fixed inset-0 bg-slate-950/60 z-40 p-4 flex items-center justify-center">
-        <section className="bg-white rounded-3xl max-w-md w-full p-6 text-center shadow-soft">
-          <h2 className="text-xl font-black">QR élève</h2>
-          <div ref={qrRef} className="mt-5 mx-auto w-[240px] min-h-[240px] grid place-items-center"></div>
-          <div className="mt-4 rounded-2xl bg-indigo-50 p-4">
-            <div className="text-sm text-indigo-700">Code du quiz</div>
-            <div className="text-3xl tracking-[.2em] font-black text-indigo-950">{publishCode}</div>
-          </div>
-          <div className="mt-4 rounded-2xl bg-amber-50 border border-amber-200 p-4 text-left text-sm text-amber-950">
-            <strong>Mode test :</strong> le QR est volontairement court, mais il faut maintenant relier l’application à un petit stockage en ligne pour que ce code retrouve le quiz sur le téléphone d’un élève. Sans ce stockage, le QR ne peut pas encore fonctionner entre deux appareils.
-          </div>
-          <button onClick={()=>setPublishOpen(false)} className="tap mt-5 w-full rounded-xl bg-slate-900 text-white font-black">Fermer</button>
-        </section>
-      </div>}
-      <Toast value={toast} onClose={()=>setToast(null)}/>
+  /* -------------------- STUDENT INTRO -------------------- */
+  if(mode==="student-intro"){
+    return <main className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-fuchsia-50 px-4 py-8 grid place-items-center">
+      <section className="max-w-xl w-full bg-white border border-slate-200 rounded-[2rem] p-7 sm:p-9 text-center shadow-soft">
+        <div className="w-20 h-20 mx-auto rounded-3xl bg-indigo-100 text-indigo-700 grid place-items-center"><Icon name="brain-circuit" size={42}/></div>
+        <p className="mt-5 uppercase tracking-[.18em] text-xs font-black text-indigo-700">Mathématiques</p>
+        <h1 className="text-3xl sm:text-4xl font-black mt-2">{title}</h1>
+        <p className="mt-3 text-slate-600">{quiz.length} questions · une question à la fois · indice disponible</p>
+        <button onClick={startStudentQuiz} className="tap mt-7 w-full rounded-2xl bg-indigo-700 text-white font-black text-lg px-5 flex items-center justify-center gap-2">
+          <Icon name="play"/> Commencer
+        </button>
+      </section>
     </main>
   }
 
-  if(screen==="quiz"&&q){
+  /* -------------------- STUDENT QUIZ -------------------- */
+  if(mode==="student-quiz"&&current){
+    const progress=Math.round(((index+1)/quiz.length)*100);
+
     return <main className="min-h-screen bg-slate-50">
-      <header className="sticky top-0 bg-white border-b z-20">
+      <header className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-slate-200">
         <div className="max-w-2xl mx-auto px-4 py-3">
-          <div className="flex justify-between font-bold text-sm"><span>Question {idx+1}/{quiz.length}</span><span>{correct} juste{correct>1?"s":""}</span></div>
-          <div className="mt-2 h-2 rounded-full bg-slate-200 overflow-hidden"><div className="h-full bg-indigo-600" style={{width:`${Math.max(5,idx/quiz.length*100)}%`}}/></div>
+          <div className="flex justify-between gap-3 text-sm font-black">
+            <span>Question {index+1}/{quiz.length}</span>
+            <span>{correctCount} juste{correctCount>1?"s":""}</span>
+          </div>
+          <div className="mt-2 h-2 bg-slate-200 rounded-full overflow-hidden" role="progressbar" aria-valuenow={progress} aria-valuemin="0" aria-valuemax="100">
+            <div className="h-full bg-indigo-600" style={{width:`${progress}%`}}></div>
+          </div>
         </div>
       </header>
 
       <div className="max-w-2xl mx-auto px-4 py-6">
         <section className="bg-white border border-slate-200 rounded-3xl p-5 sm:p-7 shadow-soft">
-          <h1 className="text-xl sm:text-2xl font-black">{q.q}</h1>
+          <h1 className="text-xl sm:text-2xl font-black leading-snug">{current.question}</h1>
 
-          <fieldset className="mt-6 space-y-3" disabled={!!feedback}>
-            {q.o.map((o,i)=>{
-              const active=sel===o;
-              let st=active?"border-indigo-600 bg-indigo-50":"border-slate-200 bg-white";
-              if(feedback&&o===q.a)st="border-emerald-600 bg-emerald-50";
-              if(feedback&&active&&o!==q.a)st="border-rose-500 bg-rose-50";
-              return <label key={i} className={`tap rounded-2xl border-2 p-4 flex gap-3 items-start cursor-pointer font-bold ${st}`}>
-                <input type="radio" name="answer" checked={active} onChange={()=>setSel(o)} className="mt-1 w-5 h-5 accent-indigo-700"/>
-                <span>{o}</span>
-              </label>
-            })}
-          </fieldset>
+          {!feedback&&<>
+            <fieldset className="mt-6 space-y-3">
+              <legend className="sr-only">Choisis une réponse</legend>
+              {current.options.map((option,i)=>{
+                const active=selected===option;
+                return <label key={i} className={`tap rounded-2xl border-2 p-4 flex gap-3 items-start cursor-pointer font-bold ${active?"border-indigo-600 bg-indigo-50":"border-slate-200 bg-white"}`}>
+                  <input type="radio" name="answer" checked={active} onChange={()=>setSelected(option)} className="mt-1 w-5 h-5 accent-indigo-700"/>
+                  <span>{option}</span>
+                </label>
+              })}
+            </fieldset>
 
-          {!feedback?
-            <button disabled={!sel} onClick={validate} className="tap mt-5 w-full rounded-2xl bg-indigo-700 disabled:bg-slate-300 text-white font-black px-5">Valider</button>
-          :
-            <div className={`mt-5 rounded-2xl border p-4 ${feedback.correct?"bg-emerald-50 border-emerald-200 text-emerald-950":"bg-rose-50 border-rose-200 text-rose-950"}`}>
-              <div className="font-black">{feedback.msg}</div>
-              <p className="mt-2 text-sm"><strong>Explication :</strong> {q.x}</p>
-              <button onClick={()=>setShowCourse(v=>!v)} className="tap mt-3 rounded-xl bg-white/80 border border-current/10 px-3 font-black text-sm flex items-center gap-2"><Icon name="book-open" size={17}/> {showCourse?"Masquer le cours":"Voir le cours"}</button>
-              {showCourse&&<div className="mt-3 rounded-xl bg-white/70 p-3 text-sm leading-relaxed">{q.s}</div>}
+            <button onClick={()=>setShowHint(v=>!v)} className="tap mt-5 w-full rounded-2xl border-2 border-amber-200 bg-amber-50 text-amber-950 font-black px-4 flex items-center justify-center gap-2">
+              <Icon name="lightbulb"/> {showHint?"Masquer l’indice":"Indice du cours"}
+            </button>
+
+            {showHint&&<div className="mt-3 rounded-2xl bg-amber-50 border border-amber-200 p-4 text-amber-950">
+              <strong>Indice :</strong> {current.hint}
+            </div>}
+
+            <button onClick={validateAnswer} disabled={!selected} className="tap mt-3 w-full rounded-2xl bg-indigo-700 disabled:bg-slate-300 text-white font-black px-5">
+              Valider ma réponse
+            </button>
+          </>}
+
+          {feedback&&<div className={`mt-6 rounded-3xl border p-5 ${feedback.correct?"bg-emerald-50 border-emerald-200 text-emerald-950":"bg-rose-50 border-rose-200 text-rose-950"}`} role="status">
+            <div className="font-black text-lg flex gap-2 items-center">
+              <Icon name={feedback.correct?"circle-check":"circle-x"}/>
+              {feedback.message}
             </div>
-          }
 
-          {feedback&&<button onClick={next} className="tap mt-5 w-full rounded-2xl bg-slate-900 text-white font-black px-5">{idx+1===quiz.length?"Voir le bilan":"Question suivante"}</button>}
+            {!feedback.correct&&<p className="mt-3"><strong>Bonne réponse :</strong> {current.answer}</p>}
+            <p className="mt-3"><strong>À retenir :</strong> {current.explanation}</p>
+
+            <details className="mt-4 rounded-2xl bg-white/70 border border-current/10 p-4">
+              <summary className="cursor-pointer font-black">📘 Voir l’extrait du cours</summary>
+              <p className="mt-2 text-sm leading-relaxed">{current.source}</p>
+            </details>
+
+            <button onClick={nextQuestion} className="tap mt-5 w-full rounded-2xl bg-slate-900 text-white font-black px-5 flex items-center justify-center gap-2">
+              {index+1===quiz.length?"Voir mon bilan":"Question suivante"} <Icon name="arrow-right"/>
+            </button>
+          </div>}
         </section>
       </div>
     </main>
   }
 
-  const missed=quiz.filter(x=>!answers[x.id]?.correct);
-  const percent=quiz.length?Math.round(correct/quiz.length*100):0;
-  return <main className="min-h-screen bg-gradient-to-br from-emerald-50 via-white to-indigo-50 px-4 py-6">
-    <div className="max-w-3xl mx-auto">
-      <section className="bg-white border border-slate-200 rounded-3xl p-6 text-center shadow-soft">
-        <div className="w-20 h-20 rounded-full bg-emerald-100 text-emerald-800 mx-auto grid place-items-center"><Icon name="trophy" size={42}/></div>
-        <h1 className="text-3xl font-black mt-4">{correct}/{quiz.length}</h1>
-        <p className="text-xl font-bold">{percent}%</p>
+  /* -------------------- STUDENT RESULTS -------------------- */
+  if(mode==="student-results"){
+    const percent=quiz.length?Math.round((correctCount/quiz.length)*100):0;
+    const missed=quiz.filter(q=>!answers[q.id]?.correct);
+
+    return <main className="min-h-screen bg-gradient-to-br from-emerald-50 via-white to-indigo-50 px-4 py-7">
+      <div className="max-w-3xl mx-auto">
+        <section className="bg-white border border-slate-200 rounded-[2rem] p-7 text-center shadow-soft">
+          <div className="w-20 h-20 mx-auto rounded-full bg-emerald-100 text-emerald-800 grid place-items-center"><Icon name="trophy" size={42}/></div>
+          <p className="mt-4 uppercase tracking-[.18em] text-xs font-black text-emerald-700">Bilan</p>
+          <h1 className="text-4xl font-black mt-2">{correctCount}/{quiz.length}</h1>
+          <p className="text-xl font-bold mt-1">{percent}%</p>
+          <p className="mt-3 text-slate-600">
+            {percent>=80?"Très bon travail !":
+             percent>=60?"C’est bien, encore quelques points à consolider.":
+             "Relis les points indiqués ci-dessous puis retente le quiz."}
+          </p>
+        </section>
+
+        <section className="mt-5 bg-white border border-slate-200 rounded-3xl p-5 shadow-soft">
+          <h2 className="text-xl font-black flex gap-2 items-center"><Icon name="book-open-check"/> Points à revoir</h2>
+          {missed.length===0
+            ? <p className="mt-3 rounded-2xl bg-emerald-50 p-4 text-emerald-900 font-bold">Aucune erreur. Bravo !</p>
+            : <div className="mt-4 space-y-3">
+                {missed.map((q,i)=><details key={q.id} className="rounded-2xl border border-slate-200 p-4">
+                  <summary className="cursor-pointer font-black">{i+1}. {q.question}</summary>
+                  <p className="mt-3 text-sm"><strong>Bonne réponse :</strong> {q.answer}</p>
+                  <p className="mt-2 text-sm"><strong>À retenir :</strong> {q.explanation}</p>
+                </details>)}
+              </div>
+          }
+        </section>
+
+        <button onClick={startStudentQuiz} className="tap mt-5 w-full rounded-2xl bg-indigo-700 text-white font-black px-5 flex items-center justify-center gap-2">
+          <Icon name="rotate-ccw"/> Refaire le quiz
+        </button>
+      </div>
+    </main>
+  }
+
+  /* -------------------- TEACHER PUBLISHED -------------------- */
+  if(mode==="published"){
+    return <main className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-emerald-50 px-4 py-6">
+      <div className="max-w-3xl mx-auto">
+        <button onClick={()=>setMode("teacher")} className="tap rounded-xl px-3 font-bold flex items-center gap-2"><Icon name="arrow-left"/> Nouveau quiz</button>
+
+        <section className="mt-3 bg-white border border-slate-200 rounded-[2rem] p-6 sm:p-8 text-center shadow-soft">
+          <div className="w-16 h-16 mx-auto rounded-2xl bg-emerald-100 text-emerald-800 grid place-items-center"><Icon name="qr-code" size={34}/></div>
+          <h1 className="text-3xl font-black mt-4">{title}</h1>
+          <p className="mt-2 text-slate-600">{quiz.length} questions · QR prêt pour les élèves</p>
+
+          <div ref={qrRef} className="mt-6 mx-auto w-[260px] min-h-[260px] grid place-items-center" aria-label="QR code élève"></div>
+
+          <p className="mt-4 text-sm text-slate-600">Affiche ce QR au vidéoprojecteur. L’élève arrive directement sur le quiz.</p>
+
+          <div className="mt-6 grid sm:grid-cols-2 gap-3">
+            <button onClick={openTeacherTest} className="tap rounded-2xl bg-indigo-700 text-white font-black px-4 flex items-center justify-center gap-2"><Icon name="play"/> Tester le quiz</button>
+            <button onClick={async()=>{
+              try{await navigator.clipboard.writeText(publishedUrl);setToast({type:"success",text:"Lien élève copié."})}
+              catch{setToast({type:"error",text:"Impossible de copier le lien."})}
+            }} className="tap rounded-2xl border-2 border-slate-300 bg-white font-black px-4 flex items-center justify-center gap-2"><Icon name="copy"/> Copier le lien</button>
+          </div>
+        </section>
+      </div>
+      <Toast value={toast} onClose={()=>setToast(null)}/>
+    </main>
+  }
+
+  /* -------------------- TEACHER HOME -------------------- */
+  return <main className="min-h-screen">
+    <header className="bg-gradient-to-br from-indigo-700 via-violet-700 to-fuchsia-700 text-white">
+      <div className="max-w-4xl mx-auto px-4 py-8 sm:py-10">
+        <div className="flex gap-4 items-start">
+          <div className="w-14 h-14 rounded-2xl bg-white/15 grid place-items-center"><Icon name="sigma" size={30}/></div>
+          <div>
+            <p className="uppercase tracking-[.2em] text-xs font-black text-indigo-100">Professeur</p>
+            <h1 className="text-3xl sm:text-4xl font-black mt-1">Quizz Maths</h1>
+            <p className="mt-2 text-indigo-100">Importe ton cours. Choisis le nombre de questions. Le QR est généré automatiquement.</p>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <div className="max-w-4xl mx-auto px-4 py-6">
+      <section className="bg-white border border-slate-200 rounded-3xl p-5 sm:p-7 shadow-soft">
+        <h2 className="text-xl font-black">1. Importer le cours</h2>
+
+        <label className="tap mt-4 w-full rounded-2xl border-2 border-dashed border-indigo-300 bg-indigo-50 hover:bg-indigo-100 cursor-pointer px-4 py-6 flex items-center justify-center gap-3 text-indigo-900 font-black">
+          <Icon name="upload"/>
+          <span>{filename||"PDF Notability, photo ou fichier texte"}</span>
+          <input className="sr-only" type="file" accept=".pdf,image/*,.txt,.md,.csv" onChange={handleFile}/>
+        </label>
+
+        {busy&&<div className="mt-4 rounded-2xl bg-amber-50 border border-amber-200 p-4 text-amber-950 font-bold flex items-center gap-3">
+          <Icon name="loader-circle"/><span>{busy}</span>
+        </div>}
+
+        <div className="mt-5 grid sm:grid-cols-2 gap-4">
+          <label className="font-black">2. Nombre de questions
+            <select value={count} onChange={e=>setCount(Number(e.target.value))} className="tap mt-2 w-full rounded-xl border border-slate-300 bg-white px-3">
+              {[10,15,20,25,30].map(n=><option key={n} value={n}>{n} questions</option>)}
+            </select>
+          </label>
+
+          <label className="font-black">Titre du quiz
+            <input value={title} onChange={e=>setTitle(e.target.value.slice(0,70))} className="tap mt-2 w-full rounded-xl border border-slate-300 px-3"/>
+          </label>
+        </div>
+
+        <button onClick={createAndPublish} disabled={!!busy||!course.trim()} className="tap mt-6 w-full rounded-2xl bg-indigo-700 disabled:bg-slate-300 text-white font-black text-lg px-5 flex items-center justify-center gap-2">
+          <Icon name="wand-sparkles"/> Créer le quiz & le QR
+        </button>
+
+        <details className="mt-5 rounded-2xl border border-slate-200 p-4">
+          <summary className="cursor-pointer font-black text-sm">Option : vérifier le texte extrait du PDF</summary>
+          <textarea value={course} onChange={e=>setCourse(e.target.value)} className="mt-3 w-full min-h-64 rounded-xl border border-slate-300 p-3 text-sm leading-relaxed"></textarea>
+        </details>
       </section>
-      <section className="mt-5 bg-white border border-slate-200 rounded-3xl p-5 shadow-soft">
-        <h2 className="text-xl font-black">À revoir</h2>
-        {missed.length===0?<p className="mt-3 text-emerald-800 font-bold">Tout est juste. Bravo !</p>:
-          <div className="mt-4 space-y-3">{missed.map((x,i)=><details key={x.id} className="rounded-2xl border border-slate-200 p-4"><summary className="font-black cursor-pointer">{i+1}. {x.q}</summary><p className="mt-2 text-sm"><strong>Bonne réponse :</strong> {x.a}</p><p className="mt-1 text-sm">{x.x}</p></details>)}</div>
-        }
-      </section>
-      <button onClick={start} className="tap mt-5 w-full rounded-2xl bg-indigo-700 text-white font-black">Relancer le quiz</button>
+
+      {library.length>0&&<section className="mt-5 bg-white border border-slate-200 rounded-3xl p-5 shadow-soft">
+        <h2 className="text-lg font-black flex items-center gap-2"><Icon name="library"/> Mes quiz publiés</h2>
+        <p className="mt-1 text-sm text-slate-600">Les QR déjà créés restent accessibles depuis cet appareil.</p>
+        <div className="mt-4 space-y-3">
+          {library.map(item=><div key={item.id} className="rounded-2xl border border-slate-200 p-4">
+            <div className="font-black">{item.title}</div>
+            <div className="mt-1 text-xs text-slate-500">{item.count} questions · {new Date(item.createdAt).toLocaleString("fr-FR")}</div>
+            <div className="mt-3 grid grid-cols-[1fr_auto] gap-2">
+              <button onClick={()=>reopenPublished(item)} className="tap rounded-xl bg-indigo-50 text-indigo-900 font-black px-3">Réafficher le QR</button>
+              <button onClick={()=>deleteFromLibrary(item.id)} className="tap rounded-xl bg-rose-50 text-rose-900 px-3" aria-label="Retirer de la bibliothèque"><Icon name="trash-2"/></button>
+            </div>
+          </div>)}
+        </div>
+      </section>}
     </div>
+
+    <Toast value={toast} onClose={()=>setToast(null)}/>
   </main>
 }
 
