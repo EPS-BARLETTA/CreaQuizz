@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#4f46e5">
-  <title>Quizz Maths</title>
+  <title>Quizz</title>
 
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -240,76 +240,49 @@ async function extractPdfText(file,onProgress){
 ========================================================= */
 
 function extractCourseItems(text){
-  let t=normalizeText(text);
-
-  // Marqueurs souvent collés au texte dans les PDF Notability.
-  t=t
+  let t=normalizeText(text)
     .replace(/\s+(Définition\s*:)/gi,"\n$1")
     .replace(/\s+(Définitions\s*:)/gi,"\n$1")
     .replace(/\s+(Propriété\s*:)/gi,"\n$1")
     .replace(/\s+(Méthode\s*:)/gi,"\n$1")
     .replace(/\s+(Règle\s*\d*\s*:)/gi,"\n$1")
     .replace(/\s+(Rappel\s*:)/gi,"\n$1")
-    .replace(/\s+(Remarque\s*:)/gi,"\n$1");
+    .replace(/\s+(À retenir\s*:)/gi,"\n$1")
+    .replace(/\s+(Point clé\s*:)/gi,"\n$1");
 
-  const rawLines=t.split("\n").map(cleanLine).filter(Boolean);
+  const raw=t.split("\n").map(cleanLine).filter(Boolean);
   const items=[];
 
   function add(type,content){
-    content=cleanLine(content)
-      .replace(/\s+(?:Exercice|Application|Dans Amplitude|Exemples?\s*:).*$/i,"")
-      .trim();
-
+    content=cleanLine(content).trim();
     if(!usefulFrench(content))return;
-
-    const key=(type+"|"+content.toLowerCase()).slice(0,240);
-    if(!items.some(x=>x.key===key)){
-      items.push({key,type,content});
-    }
+    const key=(type+"|"+content.toLowerCase()).slice(0,260);
+    if(!items.some(x=>x.key===key))items.push({key,type,content});
   }
 
-  for(let i=0;i<rawLines.length;i++){
-    const line=rawLines[i];
-
+  for(const line of raw){
     let m=line.match(/^(Définition|Définitions)\s*:\s*(.+)$/i);
-    if(m){ add("definition",m[2]); continue; }
+    if(m){add("definition",m[2]);continue;}
+    m=line.match(/^(Propriété|Méthode|Règle\s*\d*|Rappel|À retenir|Point clé)\s*:\s*(.+)$/i);
+    if(m){add("fact",m[2]);continue;}
 
-    m=line.match(/^Propriété\s*:\s*(.+)$/i);
-    if(m){ add("property",m[1]); continue; }
-
-    m=line.match(/^Méthode\s*:\s*(.+)$/i);
-    if(m){ add("method",m[1]); continue; }
-
-    m=line.match(/^Règle\s*\d*\s*:\s*(.+)$/i);
-    if(m){ add("rule",m[1]); continue; }
-
-    m=line.match(/^Rappel\s*:\s*(.+)$/i);
-    if(m){ add("reminder",m[1]); continue; }
-
-    // Cas réels du PDF fourni : phrases utiles sans marqueur.
-    if(/^(Un monôme est|Une expression littérale s'écrit|La valeur numérique d'une expression littérale est|Des binômes conjugués sont|La distributivité simple permet|Le carré d'une somme|Le carré d'une différence|Le produit de deux binômes conjugués)/i.test(line)){
-      add(/ est | sont /i.test(line)?"definition":"property",line);
-      continue;
-    }
-
-    if(/^(Pour réduire|Pour additionner|Pour soustraire|Pour calculer un produit algébrique|Pour supprimer des parenthèses)/i.test(line)){
-      add("method",line);
-      continue;
-    }
-
-    // Phrases de définition/méthode sémantiquement propres.
-    if(/est une expression|est le nombre obtenu|est égal à|signifie transformer|on additionne les termes semblables|on recopie les termes|on applique la distributivité/i.test(line)){
-      add(/est une|est le nombre|signifie/i.test(line)?"definition":"property",line);
+    // Extraction généraliste : phrases autonomes contenant une information exploitable.
+    const sentences=line.split(/(?<=[.!?])\s+/).map(cleanLine).filter(Boolean);
+    for(const sentence of sentences){
+      if(sentence.length<35||sentence.length>240)continue;
+      if(/^(exercice|activité|application|exemple|correction|consigne)\b/i.test(sentence))continue;
+      if(/\b(est|sont|désigne|signifie|correspond|permet|comprend|contient|consiste|devient|se définit|a pour|ont pour|se compose|se situe|a lieu|naît|meurt|commence|se termine)\b/i.test(sentence)){
+        add("fact",sentence);
+      }
     }
   }
 
   return items.map(({key,...rest})=>rest);
 }
-
 function parseDefinition(s){
   const patterns=[
-    /^(.{2,90}?)\s+(est une|est un|est le|sont des|signifie|désigne)\s+(.+)$/i,
-    /^Dans .+?,\s*(.{2,80}?)\s+(sont)\s+(.+)$/i
+    /^(.{2,100}?)\s+(est une|est un|est le|est la|sont des|signifie|désigne|correspond à|se définit comme|consiste en|comprend|contient)\s+(.+)$/i,
+    /^(.{2,100}?)\s+(a pour rôle de|a pour fonction de|a pour objectif de|permet de)\s+(.+)$/i
   ];
   for(const p of patterns){
     const m=s.match(p);
@@ -317,7 +290,6 @@ function parseDefinition(s){
   }
   return null;
 }
-
 function shuffle(a){
   const x=[...a];
   for(let i=x.length-1;i>0;i--){
@@ -335,7 +307,7 @@ function buildQuiz(text,count){
     .filter(x=>x.parsed&&usefulFrench(x.parsed.definition));
 
   const rules=items
-    .filter(x=>["method","rule","property","reminder"].includes(x.type))
+    .filter(x=>["fact","method","rule","property","reminder"].includes(x.type))
     .filter(x=>usefulFrench(x.content));
 
   if(definitions.length+rules.length<4){
@@ -393,24 +365,8 @@ function buildQuiz(text,count){
 
     if(alternatives.length<2)return;
 
-    let question="Quelle affirmation est correcte d’après le cours ?";
+    const question="Quelle affirmation est correcte d’après le cours ?";
     const s=r.content;
-
-    if(/réduire une expression/i.test(s)){
-      question="Comment réduit-on une expression littérale ?";
-    }else if(/produit algébrique.*monômes/i.test(s)){
-      question="Comment calcule-t-on un produit algébrique de monômes ?";
-    }else if(/parenthèses.*signe \+/i.test(s)){
-      question="Que fait-on pour supprimer des parenthèses précédées d’un signe + ?";
-    }else if(/parenthèses.*signe -/i.test(s)){
-      question="Que fait-on pour supprimer des parenthèses précédées d’un signe − ?";
-    }else if(/binômes conjugués/i.test(s)){
-      question="Quelle propriété sur les binômes conjugués est correcte ?";
-    }else if(/carré d'une somme/i.test(s)){
-      question="Quelle propriété décrit le carré d’une somme ?";
-    }else if(/carré d'une différence/i.test(s)){
-      question="Quelle propriété décrit le carré d’une différence ?";
-    }
 
     questions.push({
       id:`r-${i}`,
@@ -492,18 +448,25 @@ function studentUrl(id){
   return u.toString();
 }
 
-function saveLibrary(entry){
+function saveLocalLibrary(entry){
   try{
-    const list=JSON.parse(localStorage.getItem("qm-library-v3")||"[]");
+    const list=JSON.parse(localStorage.getItem("quizz-library-v1")||"[]");
     const next=[entry,...list.filter(x=>x.id!==entry.id)].slice(0,30);
-    localStorage.setItem("qm-library-v3",JSON.stringify(next));
+    localStorage.setItem("quizz-library-v1",JSON.stringify(next));
     return next;
   }catch{return[entry]}
 }
 
-function readLibrary(){
-  try{return JSON.parse(localStorage.getItem("qm-library-v3")||"[]")}
+function readLocalLibrary(){
+  try{return JSON.parse(localStorage.getItem("quizz-library-v1")||"[]")}
   catch{return[]}
+}
+
+async function loadSharedLibrary(){
+  const res=await fetch("/api/list-quizzes");
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok)throw new Error(data.error||"Bibliothèque indisponible.");
+  return Array.isArray(data.items)?data.items:[];
 }
 
 /* =========================================================
@@ -514,7 +477,7 @@ function App(){
   const studentId=new URLSearchParams(location.search).get("quiz");
 
   const [mode,setMode]=useState(studentId?"student-loading":"teacher");
-  const [title,setTitle]=useState("Quizz Maths");
+  const [title,setTitle]=useState("Quizz");
   const [count,setCount]=useState(15);
   const [course,setCourse]=useState("");
   const [filename,setFilename]=useState("");
@@ -522,7 +485,8 @@ function App(){
   const [toast,setToast]=useState(null);
   const [quiz,setQuiz]=useState([]);
   const [publishedUrl,setPublishedUrl]=useState("");
-  const [library,setLibrary]=useState(readLibrary());
+  const [library,setLibrary]=useState(readLocalLibrary());
+  const [libraryLoading,setLibraryLoading]=useState(!studentId);
 
   const [index,setIndex]=useState(0);
   const [selected,setSelected]=useState("");
@@ -540,12 +504,26 @@ function App(){
       try{
         const data=await loadQuiz(studentId);
         if(!Array.isArray(data.questions))throw new Error("Quiz invalide.");
-        setTitle(data.title||"Quizz Maths");
+        setTitle(data.title||"Quizz");
         setQuiz(data.questions);
         setMode("student-intro");
       }catch(e){
         setMode("student-error");
         setToast({type:"error",text:e.message});
+      }
+    })();
+  },[]);
+
+  useEffect(()=>{
+    if(studentId)return;
+    (async()=>{
+      try{
+        const items=await loadSharedLibrary();
+        if(items.length)setLibrary(items);
+      }catch(e){
+        // On garde la petite sauvegarde locale en secours.
+      }finally{
+        setLibraryLoading(false);
       }
     })();
   },[]);
@@ -616,7 +594,7 @@ function App(){
 
       setBusy("Publication du quiz…");
       const id=await publishQuiz({
-        app:"quizz-maths",
+        app:"quizz",
         version:3,
         title,
         createdAt:new Date().toISOString(),
@@ -627,13 +605,20 @@ function App(){
       setQuiz(questions);
       setPublishedUrl(url);
 
-      setLibrary(saveLibrary({
+      const entry={
         id,
         title,
         url,
         count:questions.length,
         createdAt:new Date().toISOString()
-      }));
+      };
+      saveLocalLibrary(entry);
+      try{
+        const items=await loadSharedLibrary();
+        setLibrary(items.length?items:[entry]);
+      }catch{
+        setLibrary(prev=>[entry,...prev.filter(x=>x.id!==id)].slice(0,50));
+      }
 
       setBusy("");
       setMode("published");
@@ -718,7 +703,7 @@ function App(){
     return <main className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-fuchsia-50 px-4 py-8 grid place-items-center">
       <section className="max-w-xl w-full bg-white border border-slate-200 rounded-[2rem] p-8 text-center shadow-soft">
         <div className="w-20 h-20 mx-auto rounded-3xl bg-indigo-100 text-indigo-700 grid place-items-center"><Icon name="brain-circuit" size={42}/></div>
-        <p className="mt-5 uppercase tracking-[.18em] text-xs font-black text-indigo-700">Mathématiques</p>
+        <p className="mt-5 uppercase tracking-[.18em] text-xs font-black text-indigo-700">Quiz interactif</p>
         <h1 className="text-3xl font-black mt-2">{title}</h1>
         <p className="mt-3 text-slate-600">{quiz.length} questions · indice disponible · bilan final</p>
         <button onClick={startQuiz} className="tap mt-7 w-full rounded-2xl bg-indigo-700 text-white font-black text-lg flex justify-center items-center gap-2">
@@ -860,7 +845,7 @@ function App(){
   return <main className="min-h-screen">
     <header className="bg-gradient-to-br from-indigo-700 via-violet-700 to-fuchsia-700 text-white">
       <div className="max-w-4xl mx-auto px-4 py-8 sm:py-10">
-        <h1 className="text-3xl sm:text-4xl font-black">Quizz Maths</h1>
+        <h1 className="text-3xl sm:text-4xl font-black">Quizz</h1>
         <p className="mt-2 text-indigo-100">Importe ton cours → choisis le nombre de questions → crée le quiz & le QR.</p>
       </div>
     </header>
@@ -871,7 +856,7 @@ function App(){
 
         <label className="tap mt-4 w-full rounded-2xl border-2 border-dashed border-indigo-300 bg-indigo-50 hover:bg-indigo-100 cursor-pointer px-4 py-6 flex items-center justify-center gap-3 text-indigo-900 font-black">
           <Icon name="upload"/>
-          <span>{filename||"Choisir un PDF Notability"}</span>
+          <span>{filename||"Choisir un PDF, une image ou un fichier texte"}</span>
           <input className="sr-only" type="file" accept=".pdf,application/pdf,image/*,.txt,.md,.csv" onChange={importFile}/>
         </label>
 
@@ -905,10 +890,12 @@ function App(){
         </details>
       </section>
 
-      {library.length>0&&<section className="mt-5 bg-white border border-slate-200 rounded-3xl p-5 shadow-soft">
-        <h2 className="text-lg font-black">Mes quiz publiés</h2>
+      {(libraryLoading||library.length>0)&&<section className="mt-5 bg-white border border-slate-200 rounded-3xl p-5 shadow-soft">
+        <h2 className="text-lg font-black">Bibliothèque des quiz</h2>
+        <p className="mt-1 text-sm text-slate-500">Les quiz publiés sont retrouvables ici depuis n’importe quel appareil.</p>
         <div className="mt-4 space-y-3">
-          {library.map(item=><div key={item.id} className="rounded-2xl border border-slate-200 p-4">
+          {libraryLoading&&<div className="rounded-2xl bg-slate-50 p-4 text-slate-600 font-bold">Chargement de la bibliothèque…</div>}
+          {!libraryLoading&&library.map(item=><div key={item.id} className="rounded-2xl border border-slate-200 p-4">
             <div className="font-black">{item.title}</div>
             <div className="mt-1 text-xs text-slate-500">{item.count} questions · {new Date(item.createdAt).toLocaleString("fr-FR")}</div>
             <button onClick={()=>reopen(item)} className="tap mt-3 w-full rounded-xl bg-indigo-50 text-indigo-900 font-black">Réafficher le QR</button>
