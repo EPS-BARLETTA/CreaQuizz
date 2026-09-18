@@ -38,12 +38,19 @@ export default async function handler(req, res) {
     const id = makeId();
     const createdAt = payload.createdAt || new Date().toISOString();
     const title = String(payload.title || 'Quizz').slice(0, 100);
-    const version = Number.isFinite(Number(payload.version)) ? Number(payload.version) : 12;
+    const version = Number.isFinite(Number(payload.version)) ? Number(payload.version) : 13;
+    const subject = String(payload.subject || '').trim().slice(0, 60);
+    const level = String(payload.level || '').trim().slice(0, 40);
+    const settings = payload.settings && typeof payload.settings === 'object' ? payload.settings : {};
     const pathname = `quizzes/${id}.json`;
     const data = JSON.stringify({
       app: 'quizz',
       version,
       title,
+      subject,
+      level,
+      archived: false,
+      settings,
       createdAt,
       questions: payload.questions,
     });
@@ -55,7 +62,7 @@ export default async function handler(req, res) {
     });
 
     const current = await readIndex();
-    const entry = { id, title, count: payload.questions.length, createdAt, version };
+    const entry = { id, title, subject, level, archived: false, mode: String(settings.mode || 'training'), count: payload.questions.length, createdAt, version };
     const merged = [entry, ...current.filter((x) => x?.id !== id)];
     const items = merged.slice(0, 100);
     const stale = merged.slice(100).filter((x) => /^[A-Z2-9]{8}$/.test(String(x?.id || '')));
