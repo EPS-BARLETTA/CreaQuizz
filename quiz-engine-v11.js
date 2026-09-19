@@ -33,7 +33,7 @@ function mathKey(s){return String(s||'').replace(/[−–—]/g,'-').replace(/\s
 function parseDefinition(content,meta){const x=stripPrefix(content),pats=[/^(.{2,105}?)\s+(est une|est un|est le|est la|sont des|signifie|désigne|correspond à|se définit comme|consiste en|comprend|contient)\s+(.+)$/i,/^(.{2,105}?)\s+(a pour rôle de|a pour fonction de|a pour objectif de)\s+(.+)$/i];for(const p of pats){const m=x.match(p);if(!m)continue;const term=validTerm(m[1]),definition=validAnswer(m[3]);if(term&&definition)return{kind:'definition',term,answer:definition,verb:m[2],page:meta.page,source:content}}return null}
 function parseCapability(content,meta){const x=stripPrefix(content),m=x.match(/^(.{3,110}?)\s+permet de\s+(.+)$/i);if(!m)return null;const term=validTerm(m[1]);let raw=m[2].replace(/^de\s+/i,'').trim();if(/^[^.]{8,140}\./.test(raw))raw=raw.match(/^([^.]{8,140})\./)[1].trim();const rest=validAnswer(raw);return term&&rest?{kind:'capability',term,answer:rest,page:meta.page,source:content}:null}
 function contradiction(action,answer){const a=action.toLowerCase(),b=answer.toLowerCase(),pairs=[['ajouter','soustraire'],['additionner','soustraire'],['soustraire','ajouter'],['développer','factoriser'],['factoriser','développer'],['sans changer','en changeant'],['en changeant','sans changer']];return pairs.some(([x,y])=>a.includes(x)&&b.includes(y))}
-function parseProcedure(content,meta){const x=stripPrefix(content),m=x.match(/^Pour\s+(.{4,145}?),\s*(.+)$/i);if(!m)return null;const action=validTerm(m[1]);let rawAnswer=m[2].replace(/^il suffit de\s*:?\s*/i,'').replace(/;\s*(?:multiplier|recopier|additionner|soustraire|appliquer)/gi,m=>' et '+m.replace(/^;\s*/,'')).replace(/\s+/g,' ').trim();const answer=validSentence(rawAnswer);return action&&answer&&!contradiction(action,answer)?{kind:'procedure',term:action,answer,page:meta.page,source:content}:null}
+function parseProcedure(content,meta){const x=stripPrefix(content),m=x.match(/^Pour\s+(.{4,145}?),\s*(.+)$/i);if(!m)return null;const action=validTerm(m[1]);let rawAnswer=m[2].replace(/^il suffit de\s*:?\s*/i,'').replace(/\b(?:ATTENTION|Remarque|Rappel|Exercice|Définition|Propriété)\b[\s\S]*$/i,'').replace(/[•►➤▶Ø]\s*/g,'').replace(/;\s*(?:multiplier|recopier|additionner|soustraire|appliquer)/gi,m=>' et '+m.replace(/^;\s*/,'')).replace(/\s+/g,' ').replace(/\s*;\s*/g,' et ').replace(/\s+et\s+et\s+/gi,' et ').trim().replace(/[.;,:\s]+$/,'');const answer=validSentence(rawAnswer);return action&&answer&&!contradiction(action,answer)?{kind:'procedure',term:action,answer,page:meta.page,source:content}:null}
 function parseAlias(content,meta){const x=stripPrefix(content),m=x.match(/^(.{3,110}?)\s+est aussi appelée?\s+(.+)$/i);if(!m)return null;const term=validTerm(m[1]),answer=validTerm(m[2].replace(/[.]$/,''));return term&&answer?{kind:'alias',term,answer,page:meta.page,source:content}:null}
 function parseFactDefinition(content,meta){const x=stripPrefix(content),m=x.match(/^(.{3,120}?)\s+est\s+(.+)$/i);if(!m)return null;const term=validTerm(m[1]),answer=validAnswer(m[2]);if(!term||!answer||/^(?:cette méthode|la multiplication|un nombre|soient)\b/i.test(term))return null;return{kind:'definition',term,answer,verb:'est',page:meta.page,source:content}}
 
@@ -111,13 +111,16 @@ return picked.slice(0,count)}
 function buildQuiz(text,count=10,generationMode='balanced'){const bank=extractKnowledge(text),generated=[],documentType=detectDocumentType(text),structure=structureProfile(text);let i=0;for(const item of bank){const types=item.kind==='definition'?['definition','reverse']:item.kind==='procedure'?['procedure']:item.kind==='capability'?['capability']:item.kind==='alias'?['alias']:[];for(const type of types){const q=makeQuestion(bank,item,type,i++);if(q)generated.push(q)}}const sourceGenerated=[...generated],mathKnowledge=generateMathKnowledge(text),applications=generateMathApplications(text,bank);generated.push(...mathKnowledge,...applications);const clean=generated.filter(validateQuestion).sort((a,b)=>qualityScore(b)-qualityScore(a)),sourceClean=sourceGenerated.filter(validateQuestion).sort((a,b)=>qualityScore(b)-qualityScore(a)),inspiredClean=[...mathKnowledge,...applications].filter(validateQuestion).sort((a,b)=>qualityScore(b)-qualityScore(a)),chosen=[],topicUse=new Map(),pageUse=new Map(),typeUse=new Map();const add=q=>{if(!q||chosen.includes(q)||chosen.length>=count)return false;if(q.type==='application'&&chosen.some(x=>pedagogicallyTooSimilar(x,q)))return false;chosen.push(q);topicUse.set(q.topic,(topicUse.get(q.topic)||0)+1);if(q.page)pageUse.set(q.page,(pageUse.get(q.page)||0)+1);typeUse.set(q.type,(typeUse.get(q.type)||0)+1);return true};
 const p=mathProfile(text),mathHeavy=applications.length>=Math.max(4,count*.6),balanced=balancedApplications(applications,text,count),remarkable=p.squareSum||p.squareDifference||p.conjugates||p.doubleDistributivity;
 if(generationMode==='faithful'){
-  for(const q of sourceClean)add(q);
-  const directCount=chosen.length;
-  if(chosen.length<count){
-    for(const q of balanced){if(chosen.length>=count)break;add(q)}
-    for(const q of mathKnowledge){if(chosen.length>=count)break;add(q)}
-    for(const q of inspiredClean){if(chosen.length>=count)break;add(q)}
+  const sourceTarget=Math.min(sourceClean.length,Math.max(1,Math.round(count*.6)));
+  for(const types of [['procedure','capability'],['definition'],['reverse','alias']]){
+    if(chosen.length>=sourceTarget)break;
+    for(const q of sourceClean.filter(x=>types.includes(x.type))){if(chosen.length>=sourceTarget)break;add(q)}
   }
+  for(const q of sourceClean){if(chosen.length>=sourceTarget)break;add(q)}
+  const directCount=chosen.length;
+  for(const q of balanced){if(chosen.length>=count)break;add(q)}
+  for(const q of mathKnowledge){if(chosen.length>=count)break;add(q)}
+  for(const q of inspiredClean){if(chosen.length>=count)break;add(q)}
   var faithfulDirectCount=directCount;
 }else{
   const applicationGoal=mathHeavy?(documentType==='correction'||documentType==='exercises'?Math.min(count,Math.max(8,Math.round(count*.90))):remarkable?Math.min(count,Math.max(7,Math.round(count*.82))):Math.min(count,Math.max(5,Math.round(count*.65)))):Math.min(applications.length,Math.max(2,Math.round(count*.40)));
