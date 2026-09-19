@@ -1,4 +1,4 @@
-import { put, get, del } from '@vercel/blob';
+import { put, get } from '@vercel/blob';
 
 function makeId() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -63,9 +63,7 @@ export default async function handler(req, res) {
 
     const current = await readIndex();
     const entry = { id, title, subject, level, archived: false, mode: String(settings.mode || 'training'), count: payload.questions.length, createdAt, version };
-    const merged = [entry, ...current.filter((x) => x?.id !== id)];
-    const items = merged.slice(0, 100);
-    const stale = merged.slice(100).filter((x) => /^[A-Z2-9]{8}$/.test(String(x?.id || '')));
+    const items = [entry, ...current.filter((x) => x?.id !== id)];
 
     await put('quizzes/index.json', JSON.stringify({ items }), {
       access: 'private',
@@ -74,13 +72,6 @@ export default async function handler(req, res) {
       allowOverwrite: true,
     });
 
-    for (const old of stale) {
-      try {
-        await del(`quizzes/${old.id}.json`);
-      } catch (error) {
-        console.warn('cleanup stale quiz failed', old.id, error);
-      }
-    }
 
     res.setHeader('Cache-Control', 'no-store');
     return res.status(200).json({ id });
