@@ -108,14 +108,31 @@ const families=[...groups.keys()].filter(f=>f!=='other');let round=0;while(picke
 for(const q of valid){if(picked.length>=count)break;if(!used.has(q)){picked.push(q);used.add(q)}}
 return picked.slice(0,count)}
 
-function buildQuiz(text,count=10){const bank=extractKnowledge(text),generated=[],documentType=detectDocumentType(text),structure=structureProfile(text);let i=0;for(const item of bank){const types=item.kind==='definition'?['definition','reverse']:item.kind==='procedure'?['procedure']:item.kind==='capability'?['capability']:item.kind==='alias'?['alias']:[];for(const type of types){const q=makeQuestion(bank,item,type,i++);if(q)generated.push(q)}}const mathKnowledge=generateMathKnowledge(text),applications=generateMathApplications(text,bank);generated.push(...mathKnowledge,...applications);const clean=generated.filter(validateQuestion).sort((a,b)=>qualityScore(b)-qualityScore(a)),chosen=[],topicUse=new Map(),pageUse=new Map(),typeUse=new Map();const add=q=>{if(!q||chosen.includes(q)||chosen.length>=count)return false;if(q.type==='application'&&chosen.some(x=>pedagogicallyTooSimilar(x,q)))return false;chosen.push(q);topicUse.set(q.topic,(topicUse.get(q.topic)||0)+1);if(q.page)pageUse.set(q.page,(pageUse.get(q.page)||0)+1);typeUse.set(q.type,(typeUse.get(q.type)||0)+1);return true};
+function buildQuiz(text,count=10,generationMode='balanced'){const bank=extractKnowledge(text),generated=[],documentType=detectDocumentType(text),structure=structureProfile(text);let i=0;for(const item of bank){const types=item.kind==='definition'?['definition','reverse']:item.kind==='procedure'?['procedure']:item.kind==='capability'?['capability']:item.kind==='alias'?['alias']:[];for(const type of types){const q=makeQuestion(bank,item,type,i++);if(q)generated.push(q)}}const sourceGenerated=[...generated],mathKnowledge=generateMathKnowledge(text),applications=generateMathApplications(text,bank);generated.push(...mathKnowledge,...applications);const clean=generated.filter(validateQuestion).sort((a,b)=>qualityScore(b)-qualityScore(a)),sourceClean=sourceGenerated.filter(validateQuestion).sort((a,b)=>qualityScore(b)-qualityScore(a)),inspiredClean=[...mathKnowledge,...applications].filter(validateQuestion).sort((a,b)=>qualityScore(b)-qualityScore(a)),chosen=[],topicUse=new Map(),pageUse=new Map(),typeUse=new Map();const add=q=>{if(!q||chosen.includes(q)||chosen.length>=count)return false;if(q.type==='application'&&chosen.some(x=>pedagogicallyTooSimilar(x,q)))return false;chosen.push(q);topicUse.set(q.topic,(topicUse.get(q.topic)||0)+1);if(q.page)pageUse.set(q.page,(pageUse.get(q.page)||0)+1);typeUse.set(q.type,(typeUse.get(q.type)||0)+1);return true};
 const p=mathProfile(text),mathHeavy=applications.length>=Math.max(4,count*.6),balanced=balancedApplications(applications,text,count),remarkable=p.squareSum||p.squareDifference||p.conjugates||p.doubleDistributivity;
-const applicationGoal=mathHeavy?(documentType==='correction'||documentType==='exercises'?Math.min(count,Math.max(8,Math.round(count*.90))):remarkable?Math.min(count,Math.max(7,Math.round(count*.82))):Math.min(count,Math.max(5,Math.round(count*.65)))):Math.min(applications.length,Math.max(2,Math.round(count*.40)));
-for(const q of balanced){if((typeUse.get('application')||0)>=applicationGoal)break;add(q)}
-for(const types of [['procedure','capability'],['definition'],['reverse','alias']]){if(chosen.length>=count)break;const q=clean.find(x=>types.includes(x.type)&&!chosen.includes(x)&&(topicUse.get(x.topic)||0)<2);if(q)add(q)}
-for(const q of balanced){if(chosen.length>=count)break;add(q)}
-while(chosen.length<count){let best=null,bestScore=-1e9;for(const q of clean){if(chosen.includes(q))continue;const tu=topicUse.get(q.topic)||0,pu=q.page?(pageUse.get(q.page)||0):0,ty=typeUse.get(q.type)||0;if(tu>=2&&!remarkable)continue;let score=qualityScore(q)-tu*24-pu*4-ty*2;if(tu===0)score+=18;if(q.type==='application')score+=8;if(score>bestScore){bestScore=score;best=q}}if(!best)break;add(best)}
-if(chosen.length<1)throw new Error('Aucune question suffisamment fiable n’a pu être créée à partir de ce document.');const questions=shuffle(chosen.slice(0,count)),audit=auditQuiz(questions,count);if(!audit.ok)throw new Error('Le contrôle qualité final a détecté une anomalie. Le quiz n’a pas été publié.');return{questions,bank,generated:clean,applications,requested:count,actual:questions.length,audit,documentType,structure}}
+if(generationMode==='faithful'){
+  for(const q of sourceClean)add(q);
+  if(chosen.length<1)throw new Error('Le document ne contient pas assez de contenu directement exploitable pour le mode « Fidèle au document ». Essaie le mode Équilibré ou Inspiré.');
+}else{
+  const applicationGoal=mathHeavy?(documentType==='correction'||documentType==='exercises'?Math.min(count,Math.max(8,Math.round(count*.90))):remarkable?Math.min(count,Math.max(7,Math.round(count*.82))):Math.min(count,Math.max(5,Math.round(count*.65)))):Math.min(applications.length,Math.max(2,Math.round(count*.40)));
+  if(generationMode==='inspired'){
+    for(const q of balanced){if((typeUse.get('application')||0)>=applicationGoal)break;add(q)}
+    for(const q of inspiredClean)if(chosen.length<count)add(q);
+  }else{
+    const sourceTarget=Math.min(sourceClean.length,Math.max(2,Math.round(count*.45)));
+    for(const types of [['procedure','capability'],['definition'],['reverse','alias']]){
+      if(chosen.length>=sourceTarget)break;
+      for(const q of sourceClean.filter(x=>types.includes(x.type))){if(chosen.length>=sourceTarget)break;add(q)}
+    }
+    for(const q of sourceClean){if(chosen.length>=sourceTarget)break;add(q)}
+    for(const q of balanced){if(chosen.length>=count)break;add(q)}
+  }
+  while(chosen.length<count){
+    let best=null,bestScore=-1e9;
+    const pool=generationMode==='inspired'?inspiredClean:clean;
+    for(const q of pool){if(chosen.includes(q))continue;const tu=topicUse.get(q.topic)||0,pu=q.page?(pageUse.get(q.page)||0):0,ty=typeUse.get(q.type)||0;if(tu>=2&&!remarkable&&generationMode!=='faithful')continue;let score=qualityScore(q)-tu*24-pu*4-ty*2;if(tu===0)score+=18;if(q.type==='application')score+=8;if(generationMode==='balanced'&&!q.generatedFromTopic)score+=10;if(score>bestScore){bestScore=score;best=q}}if(!best)break;add(best)}
+}
+if(chosen.length<1)throw new Error('Aucune question suffisamment fiable n’a pu être créée à partir de ce document.');const questions=shuffle(chosen.slice(0,count)),audit=auditQuiz(questions,count);if(!audit.ok)throw new Error('Le contrôle qualité final a détecté une anomalie. Le quiz n’a pas été publié.');return{questions,bank,generated:clean,applications,requested:count,actual:questions.length,audit,documentType,structure,generationMode}}
 
 root.QuizzEngine={normalizeFrench,extractKnowledge,buildQuiz,validateQuestion,qualityScore,generateMathApplications,generateMathKnowledge,mathProfile,auditQuiz,detectDocumentType,structureProfile};
 if(typeof module!=='undefined'&&module.exports)module.exports=root.QuizzEngine;
