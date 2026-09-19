@@ -112,7 +112,13 @@ function buildQuiz(text,count=10,generationMode='balanced'){const bank=extractKn
 const p=mathProfile(text),mathHeavy=applications.length>=Math.max(4,count*.6),balanced=balancedApplications(applications,text,count),remarkable=p.squareSum||p.squareDifference||p.conjugates||p.doubleDistributivity;
 if(generationMode==='faithful'){
   for(const q of sourceClean)add(q);
-  if(chosen.length<1)throw new Error('Le document ne contient pas assez de contenu directement exploitable pour le mode « Fidèle au document ». Essaie le mode Équilibré ou Inspiré.');
+  const directCount=chosen.length;
+  if(chosen.length<count){
+    for(const q of balanced){if(chosen.length>=count)break;add(q)}
+    for(const q of mathKnowledge){if(chosen.length>=count)break;add(q)}
+    for(const q of inspiredClean){if(chosen.length>=count)break;add(q)}
+  }
+  var faithfulDirectCount=directCount;
 }else{
   const applicationGoal=mathHeavy?(documentType==='correction'||documentType==='exercises'?Math.min(count,Math.max(8,Math.round(count*.90))):remarkable?Math.min(count,Math.max(7,Math.round(count*.82))):Math.min(count,Math.max(5,Math.round(count*.65)))):Math.min(applications.length,Math.max(2,Math.round(count*.40)));
   if(generationMode==='inspired'){
@@ -132,7 +138,7 @@ if(generationMode==='faithful'){
     const pool=generationMode==='inspired'?inspiredClean:clean;
     for(const q of pool){if(chosen.includes(q))continue;const tu=topicUse.get(q.topic)||0,pu=q.page?(pageUse.get(q.page)||0):0,ty=typeUse.get(q.type)||0;if(tu>=2&&!remarkable&&generationMode!=='faithful')continue;let score=qualityScore(q)-tu*24-pu*4-ty*2;if(tu===0)score+=18;if(q.type==='application')score+=8;if(generationMode==='balanced'&&!q.generatedFromTopic)score+=10;if(score>bestScore){bestScore=score;best=q}}if(!best)break;add(best)}
 }
-if(chosen.length<1)throw new Error('Aucune question suffisamment fiable n’a pu être créée à partir de ce document.');const questions=shuffle(chosen.slice(0,count)),audit=auditQuiz(questions,count);if(!audit.ok)throw new Error('Le contrôle qualité final a détecté une anomalie. Le quiz n’a pas été publié.');return{questions,bank,generated:clean,applications,requested:count,actual:questions.length,audit,documentType,structure,generationMode}}
+if(chosen.length<1)throw new Error('Aucune question suffisamment fiable n’a pu être créée à partir de ce document.');const questions=shuffle(chosen.slice(0,count)),audit=auditQuiz(questions,count);if(!audit.ok)throw new Error('Le contrôle qualité final a détecté une anomalie. Le quiz n’a pas été publié.');return{questions,bank,generated:clean,applications,requested:count,actual:questions.length,audit,documentType,structure,generationMode,faithfulDirectCount:generationMode==='faithful'?(typeof faithfulDirectCount==='number'?faithfulDirectCount:0):null}}
 
 root.QuizzEngine={normalizeFrench,extractKnowledge,buildQuiz,validateQuestion,qualityScore,generateMathApplications,generateMathKnowledge,mathProfile,auditQuiz,detectDocumentType,structureProfile};
 if(typeof module!=='undefined'&&module.exports)module.exports=root.QuizzEngine;
