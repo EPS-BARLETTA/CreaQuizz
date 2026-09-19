@@ -14,10 +14,10 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="/quiz-engine-v11.js?v=13.1.6"></script>
 <style>
-*{box-sizing:border-box}body{margin:0;background:#f8fafc;color:#0f172a}button,input,select,textarea{font:inherit}.tap{min-height:48px}.soft{box-shadow:0 14px 35px rgba(15,23,42,.08)}:focus-visible{outline:3px solid #111827;outline-offset:3px}.pill{border-radius:9999px;padding:.35rem .7rem;font-size:.75rem;font-weight:800}.switch{width:46px;height:26px;border-radius:9999px;padding:3px;transition:.2s}.switch>span{display:block;width:20px;height:20px;border-radius:9999px;background:#fff;transition:.2s}.switch.on>span{transform:translateX(20px)}
+*{box-sizing:border-box}body{margin:0;background:#f8fafc;color:#0f172a}button,input,select,textarea{font:inherit}.tap{min-height:48px}.soft{box-shadow:0 14px 35px rgba(15,23,42,.08)}:focus-visible{outline:3px solid #111827;outline-offset:3px}.pill{border-radius:9999px;padding:.35rem .7rem;font-size:.75rem;font-weight:800}.switch{width:46px;height:26px;border-radius:9999px;padding:3px;transition:.2s}.switch>span{display:block;width:20px;height:20px;border-radius:9999px;background:#fff;transition:.2s}.switch.on>span{transform:translateX(20px)}.creator-signature{position:fixed;left:50%;bottom:calc(7px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:40;pointer-events:none;user-select:none;white-space:nowrap;font-size:10px;line-height:1;color:rgba(100,116,139,.42);background:rgba(248,250,252,.72);border:1px solid rgba(148,163,184,.12);padding:4px 9px;border-radius:9999px;backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px)}@media(max-width:768px){.creator-signature{font-size:9px;bottom:calc(5px + env(safe-area-inset-bottom,0px));padding:4px 8px}}
 </style>
 </head>
-<body><div id="root"></div>
+<body><div id="root"></div><div class="creator-signature" aria-hidden="true">Créé par Jérôme BARLETTA</div>
 <script type="text/babel">
 const {useEffect,useMemo,useRef,useState}=React;
 const GOOD=["Bravo ! C’est juste.","Très bien !","Excellent !","Bien joué !","Parfait !"];
